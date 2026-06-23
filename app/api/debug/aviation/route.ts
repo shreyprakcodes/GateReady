@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getFlightStatus } from "@/lib/api/aviation";
 
 export async function GET() {
+  if (process.env.NODE_ENV === "production") {
+    return new Response("Not Found", { status: 404 });
+  }
+
   const key = process.env.AVIATIONSTACK_API_KEY;
   console.log("[debug] AVIATIONSTACK_API_KEY in Next.js:", key ? `${key.slice(0, 6)}...` : "MISSING");
 
