@@ -3,11 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Circle, Loader2 } from "lucide-react";
 
-// ─── Design tokens ────────────────────────────────────────────────
-
-const NAVY = "#07101F";
-const TEAL = "#00D4B8";
-
 // ─── Milestone definitions ────────────────────────────────────────
 
 type MilestoneType = "left_home" | "cleared_security" | "at_gate" | "boarded";
@@ -71,26 +66,28 @@ export function MilestonePanel({ tripId }: Props) {
   }, [tripId, fetchMilestones]);
 
   const reachedMap = Object.fromEntries(milestones.map((m) => [m.type, m.reached_at]));
-
-  // Determine which milestone is next (first unreached)
-  const nextIdx = STEPS.findIndex((s) => !reachedMap[s.type]);
+  const nextIdx    = STEPS.findIndex((s) => !reachedMap[s.type]);
 
   return (
     <div
       className="rounded-2xl overflow-hidden"
-      style={{ backgroundColor: NAVY, boxShadow: `0 4px 24px rgba(0,212,184,0.07)` }}
+      style={{
+        backgroundColor: "#FFFFFF",
+        boxShadow: "0 2px 16px rgba(0,0,0,0.06)",
+        border: "1px solid #E8E0D5",
+      }}
     >
       {/* Header */}
       <div className="px-5 pt-5 pb-4">
         <p
           className="text-[10px] font-bold uppercase tracking-widest"
-          style={{ color: `${TEAL}80` }}
+          style={{ color: "#4F46E5" }}
         >
           Travel Day Progress
         </p>
         <p
           className="text-base font-bold mt-1"
-          style={{ color: "#E2E8F0", fontFamily: "'Space Grotesk', sans-serif" }}
+          style={{ color: "#1A1A2E", fontFamily: "'Space Grotesk', sans-serif" }}
         >
           {loading
             ? "Loading…"
@@ -105,12 +102,12 @@ export function MilestonePanel({ tripId }: Props) {
       {/* Steps */}
       <div
         className="px-5 pb-5 space-y-2"
-        style={{ borderTop: "1px solid #162030" }}
+        style={{ borderTop: "1px solid #F0EDE8" }}
       >
         <div className="pt-4 space-y-2">
           {loading ? (
             <div className="flex justify-center py-4">
-              <Loader2 className="h-5 w-5 animate-spin" style={{ color: TEAL }} />
+              <Loader2 className="h-5 w-5 animate-spin" style={{ color: "#8B8070" }} />
             </div>
           ) : (
             STEPS.map((step, idx) => {
@@ -127,15 +124,15 @@ export function MilestonePanel({ tripId }: Props) {
                   className="w-full flex items-center gap-4 rounded-xl px-4 py-3 transition-all active:scale-[0.98] text-left"
                   style={{
                     backgroundColor: isReached
-                      ? `${TEAL}12`
+                      ? "#F0FAF6"
                       : isNext
-                        ? "#162030"
-                        : "#0A1628",
+                        ? "#FAF7F2"
+                        : "#FAFAF9",
                     border: isReached
-                      ? `1px solid ${TEAL}30`
+                      ? "1px solid #BBF0DC"
                       : isNext
-                        ? `1px solid #1E3050`
-                        : `1px solid #0F1E30`,
+                        ? "1px solid #E8E0D5"
+                        : "1px solid #F0EDE8",
                     cursor: isReached ? "default" : "pointer",
                   }}
                 >
@@ -144,10 +141,10 @@ export function MilestonePanel({ tripId }: Props) {
                     className="h-10 w-10 rounded-xl flex items-center justify-center shrink-0 text-lg"
                     style={{
                       backgroundColor: isReached
-                        ? `${TEAL}18`
+                        ? "#D1FAE5"
                         : isNext
-                          ? "#1E3050"
-                          : "#0F1E30",
+                          ? "#F0EDE8"
+                          : "#F5F4F2",
                     }}
                   >
                     {step.icon}
@@ -157,11 +154,13 @@ export function MilestonePanel({ tripId }: Props) {
                   <div className="flex-1 min-w-0">
                     <p
                       className="text-sm font-semibold"
-                      style={{ color: isReached ? TEAL : isNext ? "#E2E8F0" : "#4A6580" }}
+                      style={{
+                        color: isReached ? "#059669" : isNext ? "#1A1A2E" : "#B5A89A",
+                      }}
                     >
                       {step.label}
                     </p>
-                    <p className="text-[11px] mt-0.5" style={{ color: "#4A6580" }}>
+                    <p className="text-[11px] mt-0.5" style={{ color: "#B5A89A" }}>
                       {isReached ? `Reached at ${fmtTime(reachedAt)}` : step.hint}
                     </p>
                   </div>
@@ -169,13 +168,13 @@ export function MilestonePanel({ tripId }: Props) {
                   {/* Status indicator */}
                   <div className="shrink-0">
                     {isBusy ? (
-                      <Loader2 className="h-4 w-4 animate-spin" style={{ color: TEAL }} />
+                      <Loader2 className="h-4 w-4 animate-spin" style={{ color: "#8B8070" }} />
                     ) : isReached ? (
-                      <CheckCircle2 className="h-5 w-5" style={{ color: TEAL }} />
+                      <CheckCircle2 className="h-5 w-5" style={{ color: "#059669" }} />
                     ) : isNext ? (
-                      <Circle className="h-4 w-4" style={{ color: "#1E3050", strokeWidth: 1.5 }} />
+                      <Circle className="h-4 w-4" style={{ color: "#E8E0D5", strokeWidth: 1.5 }} />
                     ) : (
-                      <Circle className="h-4 w-4" style={{ color: "#0F1E30", strokeWidth: 1.5 }} />
+                      <Circle className="h-4 w-4" style={{ color: "#F0EDE8", strokeWidth: 1.5 }} />
                     )}
                   </div>
                 </button>

@@ -4,17 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Loader2, MapPin, Navigation, RefreshCw } from "lucide-react";
 import { useStore } from "@/lib/store/useStore";
 import { useUserLocation } from "@/src/hooks/useUserLocation";
+import { getAirlineTheme } from "@/lib/airlineThemes";
 
 // ─── Design tokens ────────────────────────────────────────────────
 
-const NAVY = "#07101F";
-const TEAL = "#00D4B8";
-
 const STATUS_CFG = {
-  "on-time":    { color: TEAL,      bg: `${TEAL}18`,      label: "On Time"       },
-  "leave-soon": { color: "#F5A623", bg: "#F5A62318",      label: "Leave Soon"    },
-  "leave-now":  { color: "#FF6B00", bg: "#FF6B0018",      label: "Leave Now!"    },
-  "late":       { color: "#FF4444", bg: "#FF444418",      label: "Running Late"  },
+  "on-time":    { color: "#00C48C", bg: "#E8FAF5", label: "On Time"       },
+  "leave-soon": { color: "#D97706", bg: "#FEF3C7", label: "Leave Soon"    },
+  "leave-now":  { color: "#EA580C", bg: "#FFF1E6", label: "Leave Now!"    },
+  "late":       { color: "#DC2626", bg: "#FEE2E2", label: "Running Late"  },
 } as const;
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -31,7 +29,7 @@ interface LeaveNowData {
       minutes:     number;
       isLive:      boolean;
       note?:       string;
-      unavailable?: boolean;   // true when user is far from the departure airport
+      unavailable?: boolean;
       distanceKm?: number;
     };
     tsa:        { minutes: number; source: string; note?: string };
@@ -51,8 +49,6 @@ function fmtTime(iso: string) {
 function formatCountdown(ms: number): string {
   if (ms <= 0) {
     const mins = Math.round(Math.abs(ms) / 60_000);
-    // Cap absurd "late" values — anything > 3 h past the leave time means
-    // either the flight has already departed or the data is stale.
     if (mins > 180) return "—";
     return mins < 1 ? "NOW" : `${mins}m late`;
   }
@@ -75,17 +71,17 @@ function BreakdownRow({
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-2 min-w-0">
         <span className="text-base leading-none shrink-0">{icon}</span>
-        <span className="text-sm truncate" style={{ color: "#94A3B8" }}>{label}</span>
+        <span className="text-sm truncate" style={{ color: "#8B8070" }}>{label}</span>
         {estimated && (
           <span
             className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded shrink-0"
-            style={{ backgroundColor: "#162030", color: "#6B8DB0" }}
+            style={{ backgroundColor: "#F0EDE8", color: "#8B8070" }}
           >
             est
           </span>
         )}
       </div>
-      <span className="text-sm font-bold shrink-0" style={{ color: "#E2E8F0" }}>
+      <span className="text-sm font-bold shrink-0" style={{ color: "#1A1A2E" }}>
         {minutes} min
       </span>
     </div>
@@ -106,6 +102,10 @@ export function LeaveNowCard() {
 
   const abortRef    = useRef<AbortController | null>(null);
   const hadCoordsRef = useRef(false);
+
+  // Derive accent from airline for the header label
+  const airlineCode = trip?.flight_number?.match(/^([A-Z]{2,3})/)?.[1] ?? null;
+  const accentColor = getAirlineTheme(airlineCode).primary;
 
   const fetchLeaveNow = useCallback(async (coordLat?: number, coordLng?: number) => {
     if (!trip?.departure_time) return;
@@ -142,14 +142,12 @@ export function LeaveNowCard() {
     }
   }, [trip?.id, trip?.departure_time]);
 
-  // Initial fetch (no coords yet — returns estimated drive time)
   useEffect(() => {
     fetchLeaveNow();
     return () => abortRef.current?.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-fetch the moment real coordinates first become available
   useEffect(() => {
     if (lat !== null && lng !== null && !hadCoordsRef.current) {
       hadCoordsRef.current = true;
@@ -157,7 +155,6 @@ export function LeaveNowCard() {
     }
   }, [lat, lng, fetchLeaveNow]);
 
-  // Auto-refresh every 5 minutes
   useEffect(() => {
     const id = setInterval(() => {
       fetchLeaveNow(
@@ -168,7 +165,6 @@ export function LeaveNowCard() {
     return () => clearInterval(id);
   }, [fetchLeaveNow, lat, lng]);
 
-  // Live countdown ticker
   useEffect(() => {
     if (!data) return;
     const leaveAt = new Date(data.recommendedLeaveTime).getTime();
@@ -180,32 +176,34 @@ export function LeaveNowCard() {
 
   if (!trip?.departure_time) return null;
 
-  // When the countdown is capped ("> 3 h late"), use a neutral colour so we
-  // don't blast a red "Running Late" for what is likely a stale data state.
   const staleData = countdown === "—";
   const cfg = data
     ? staleData
-      ? { color: "#6B8DB0", bg: "#6B8DB018", label: "Check flight details" }
+      ? { color: "#8B8070", bg: "#F0EDE8", label: "Check flight details" }
       : STATUS_CFG[data.status] ?? STATUS_CFG["on-time"]
     : STATUS_CFG["on-time"];
 
   return (
     <div
       className="rounded-2xl overflow-hidden"
-      style={{ backgroundColor: NAVY, boxShadow: `0 4px 24px rgba(0,212,184,0.08)` }}
+      style={{
+        backgroundColor: "#FFFFFF",
+        boxShadow: "0 2px 16px rgba(0,0,0,0.06)",
+        border: "1px solid #E8E0D5",
+      }}
     >
       {/* ── Header ─────────────────────────────────────────────── */}
       <div className="px-5 pt-5 pb-4">
         <div className="flex items-center justify-between mb-3">
           <p
             className="text-[10px] font-bold uppercase tracking-widest"
-            style={{ color: `${TEAL}80` }}
+            style={{ color: accentColor }}
           >
             Leave Now Engine
           </p>
           <div className="flex items-center gap-2">
             {(fetching || locLoading) && (
-              <Loader2 className="h-3 w-3 animate-spin" style={{ color: TEAL }} />
+              <Loader2 className="h-3 w-3 animate-spin" style={{ color: "#8B8070" }} />
             )}
             <button
               onClick={() => fetchLeaveNow(
@@ -213,34 +211,34 @@ export function LeaveNowCard() {
                 hadCoordsRef.current && lng !== null ? lng : undefined,
               )}
               className="h-6 w-6 rounded-full flex items-center justify-center"
-              style={{ backgroundColor: "#162030" }}
+              style={{ backgroundColor: "#F0EDE8" }}
               aria-label="Refresh"
             >
-              <RefreshCw className="h-3 w-3" style={{ color: "#6B8DB0" }} />
+              <RefreshCw className="h-3 w-3" style={{ color: "#8B8070" }} />
             </button>
           </div>
         </div>
 
         {fetchErr ? (
           <div className="flex items-center gap-2 py-1">
-            <AlertCircle className="h-4 w-4 shrink-0" style={{ color: "#FF4444" }} />
-            <p className="text-sm" style={{ color: "#FF4444" }}>{fetchErr}</p>
+            <AlertCircle className="h-4 w-4 shrink-0" style={{ color: "#DC2626" }} />
+            <p className="text-sm" style={{ color: "#DC2626" }}>{fetchErr}</p>
           </div>
         ) : data ? (
           <>
             {/* Leave time + countdown */}
             <div className="flex items-end justify-between gap-3">
               <div>
-                <p className="text-xs mb-0.5" style={{ color: "#4A6580" }}>Leave by</p>
+                <p className="text-xs mb-0.5" style={{ color: "#8B8070" }}>Leave by</p>
                 <p
                   className="text-4xl font-bold tracking-tight"
-                  style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif" }}
+                  style={{ color: "#1A1A2E", fontFamily: "'Space Grotesk', sans-serif" }}
                 >
                   {fmtTime(data.recommendedLeaveTime)}
                 </p>
               </div>
               <div className="text-right pb-0.5">
-                <p className="text-xs mb-0.5" style={{ color: "#4A6580" }}>in</p>
+                <p className="text-xs mb-0.5" style={{ color: "#8B8070" }}>in</p>
                 <p
                   className="text-2xl font-bold tabular-nums"
                   style={{ color: cfg.color, fontFamily: "monospace" }}
@@ -269,8 +267,8 @@ export function LeaveNowCard() {
           </>
         ) : (
           <div className="flex items-center gap-2 py-4">
-            <Loader2 className="h-4 w-4 animate-spin" style={{ color: TEAL }} />
-            <p className="text-sm" style={{ color: "#4A6580" }}>Computing best leave time…</p>
+            <Loader2 className="h-4 w-4 animate-spin" style={{ color: "#8B8070" }} />
+            <p className="text-sm" style={{ color: "#8B8070" }}>Computing best leave time…</p>
           </div>
         )}
       </div>
@@ -279,18 +277,17 @@ export function LeaveNowCard() {
       {data && (
         <div
           className="px-5 py-4 space-y-2.5"
-          style={{ borderTop: "1px solid #162030" }}
+          style={{ borderTop: "1px solid #F0EDE8" }}
         >
           {data.inputs.drive.unavailable ? (
-            /* User is far from the departure airport — drive routing skipped */
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-base leading-none shrink-0">🚗</span>
-                <span className="text-sm truncate" style={{ color: "#94A3B8" }}>
+                <span className="text-sm truncate" style={{ color: "#8B8070" }}>
                   Drive to airport
                 </span>
               </div>
-              <span className="text-sm font-bold shrink-0" style={{ color: "#4A6580" }}>
+              <span className="text-sm font-bold shrink-0" style={{ color: "#B5A89A" }}>
                 N/A
               </span>
             </div>
@@ -303,7 +300,7 @@ export function LeaveNowCard() {
             />
           )}
           {data.inputs.drive.unavailable && data.inputs.drive.note && (
-            <p className="text-[11px] leading-relaxed" style={{ color: "#4A6580" }}>
+            <p className="text-[11px] leading-relaxed" style={{ color: "#B5A89A" }}>
               {data.inputs.drive.note}
             </p>
           )}
@@ -314,18 +311,18 @@ export function LeaveNowCard() {
             estimated={data.inputs.tsa.source !== "live"}
           />
           <BreakdownRow icon="🚶" label="Walk to gate" minutes={data.inputs.walkToGate.minutes} />
-          <BreakdownRow icon="⏱" label="Buffer"       minutes={data.inputs.buffer.minutes}     />
+          <BreakdownRow icon="⏱"  label="Buffer"       minutes={data.inputs.buffer.minutes}     />
         </div>
       )}
 
-      {/* ── Location state footer ──────────────────────────────── */}
+      {/* ── Location footer ────────────────────────────────────── */}
       {permissionState === "denied" && (
         <div
           className="px-5 py-3 flex items-center gap-2"
-          style={{ borderTop: "1px solid #162030" }}
+          style={{ borderTop: "1px solid #F0EDE8" }}
         >
-          <MapPin className="h-3.5 w-3.5 shrink-0" style={{ color: "#4A6580" }} />
-          <p className="text-xs" style={{ color: "#4A6580" }}>
+          <MapPin className="h-3.5 w-3.5 shrink-0" style={{ color: "#B5A89A" }} />
+          <p className="text-xs" style={{ color: "#B5A89A" }}>
             Drive time is estimated — enable location for live traffic
           </p>
         </div>
@@ -334,18 +331,18 @@ export function LeaveNowCard() {
       {permissionState === "prompt" && lat === null && (
         <div
           className="px-5 py-3 flex items-center justify-between gap-3"
-          style={{ borderTop: "1px solid #162030" }}
+          style={{ borderTop: "1px solid #F0EDE8" }}
         >
           <div className="flex items-center gap-2">
-            <Navigation className="h-3.5 w-3.5 shrink-0" style={{ color: TEAL }} />
-            <p className="text-xs" style={{ color: "#4A6580" }}>
+            <Navigation className="h-3.5 w-3.5 shrink-0" style={{ color: "#8B8070" }} />
+            <p className="text-xs" style={{ color: "#8B8070" }}>
               Share location for live traffic
             </p>
           </div>
           <button
             onClick={requestPermission}
             className="text-xs font-bold px-3 py-1 rounded-full shrink-0"
-            style={{ backgroundColor: `${TEAL}20`, color: TEAL }}
+            style={{ backgroundColor: "#F0EDE8", color: "#1A1A2E" }}
           >
             Allow
           </button>

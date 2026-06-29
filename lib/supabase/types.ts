@@ -20,6 +20,10 @@ export interface Database {
           home_lng: number | null;
           tsa_precheck: boolean;
           global_entry: boolean;
+          has_real_id: boolean;
+          has_clear: boolean;
+          known_traveler_number: string | null;
+          lounge_memberships: string[] | null;
           preferred_transport: string;
           accessibility_needs: string[] | null;
           created_at: string;
