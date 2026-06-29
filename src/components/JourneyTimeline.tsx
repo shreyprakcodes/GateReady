@@ -9,18 +9,22 @@ export interface JourneyStep {
 }
 
 interface Props {
-  steps:           JourneyStep[];
-  origin:          string;
-  destination:     string;
-  urgentLeave?:    boolean;
+  steps:            JourneyStep[];
+  origin:           string;
+  destination:      string;
+  urgentLeave?:     boolean;
   driveTimeSource?: "google" | "estimated";
+  departureTz?:     string | null;
 }
 
-function fmt12(d: Date): string {
-  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+function fmt12(d: Date, tz?: string | null): string {
+  return d.toLocaleTimeString("en-US", {
+    hour: "numeric", minute: "2-digit", hour12: true,
+    ...(tz ? { timeZone: tz } : {}),
+  });
 }
 
-export function JourneyTimeline({ steps, origin, destination, urgentLeave = false, driveTimeSource }: Props) {
+export function JourneyTimeline({ steps, origin, destination, urgentLeave = false, driveTimeSource, departureTz }: Props) {
   if (steps.length === 0) return null;
 
   return (
@@ -120,7 +124,7 @@ export function JourneyTimeline({ steps, origin, destination, urgentLeave = fals
                       animation:           "timeUpdate 0.3s ease",
                     }}
                   >
-                    {fmt12(step.time)}
+                    {fmt12(step.time, departureTz)}
                   </p>
                 </div>
 

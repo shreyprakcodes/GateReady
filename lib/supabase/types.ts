@@ -35,8 +35,17 @@ export interface Database {
           airline: string | null;
           origin: string | null;
           destination: string | null;
-          departure_time: string | null;
-          boarding_time: string | null;
+          departure_time:      string | null;
+          departure_scheduled: string | null;
+          departure_estimated: string | null;
+          departure_actual:    string | null;
+          arrival_time:        string | null;
+          arrival_scheduled:   string | null;
+          arrival_estimated:   string | null;
+          arrival_actual:      string | null;
+          boarding_time:       string | null;
+          departure_timezone:  string | null;
+          destination_timezone: string | null;
           gate: string | null;
           terminal: string | null;
           seat: string | null;
@@ -46,6 +55,8 @@ export interface Database {
           parental_mode: boolean;
           parent_id: string | null;
           parental_settings: Json | null;
+          share_token: string | null;
+          share_enabled: boolean;
           created_at: string;
         };
         Insert: Omit<Database["public"]["Tables"]["trips"]["Row"], "id" | "created_at">;
@@ -119,6 +130,30 @@ export interface Database {
         };
         Insert: Omit<Database["public"]["Tables"]["family_links"]["Row"], "id">;
         Update: Partial<Database["public"]["Tables"]["family_links"]["Insert"]>;
+      };
+      trip_milestones: {
+        Row: {
+          id: string;
+          trip_id: string;
+          type: "left_home" | "cleared_security" | "at_gate" | "boarded";
+          reached_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["trip_milestones"]["Row"], "id">;
+        Update: Partial<Database["public"]["Tables"]["trip_milestones"]["Insert"]>;
+      };
+      notifications: {
+        Row: {
+          id: string;
+          user_id: string;
+          trip_id: string | null;
+          type: "delay" | "gate_change" | "cancellation" | "leave_soon" | null;
+          title: string | null;
+          body: string | null;
+          read: boolean;
+          created_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["notifications"]["Row"], "id" | "created_at">;
+        Update: Partial<Database["public"]["Tables"]["notifications"]["Insert"]>;
       };
     };
   };

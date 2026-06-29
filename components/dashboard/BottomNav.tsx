@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, CalendarDays, Bell, User } from "lucide-react";
+import { Home, CalendarDays, User } from "lucide-react";
 import { useStore } from "@/lib/store/useStore";
+import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 
 const P = "#1B6EF3";
 const G = "#6B7A90";
@@ -16,14 +17,12 @@ export function BottomNav() {
   const tabs = [
     { key: "trips",    label: "Trips",    href: "/dashboard", Icon: Home },
     { key: "timeline", label: "Timeline", href: timelineHref, Icon: CalendarDays },
-    { key: "alerts",   label: "Alerts",   href: "/dashboard", Icon: Bell },
     { key: "profile",  label: "Profile",  href: "/profile",   Icon: User },
   ] as const;
 
   function active(key: string) {
     if (key === "trips")    return pathname === "/dashboard" || pathname === "/";
     if (key === "timeline") return pathname.startsWith("/trip/");
-    if (key === "alerts")   return false;
     if (key === "profile")  return pathname.startsWith("/profile");
     return false;
   }
@@ -54,6 +53,8 @@ export function BottomNav() {
             </Link>
           );
         })}
+        {/* Alerts tab — self-contained bell with live unread count and panel */}
+        <NotificationCenter />
       </div>
     </nav>
   );

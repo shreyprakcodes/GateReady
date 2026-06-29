@@ -13,6 +13,7 @@ import { useStore } from "@/lib/store/useStore";
 import { useFamilyStore } from "@/src/store/familyStore";
 import { BottomNav } from "@/components/dashboard/BottomNav";
 import type { Database } from "@/lib/supabase/types";
+import { fmtFlightTime, fmtFlightDate, fmtDayLabel, resolveFlightTime } from "@/lib/utils/time";
 
 type Trip = Database["public"]["Tables"]["trips"]["Row"];
 
@@ -38,24 +39,8 @@ function todayISO() {
   return new Date().toISOString().split("T")[0];
 }
 
-function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-}
-
 function leaveByTime(depIso: string): Date {
   return new Date(new Date(depIso).getTime() - 2.5 * 60 * 60_000);
-}
-
-function dateLabel(depIso: string): string {
-  const dep = new Date(depIso);
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
-  const d = new Date(dep); d.setHours(0, 0, 0, 0);
-  const dayStr  = dep.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
-  const dateStr = dep.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase();
-  if (d.getTime() === today.getTime())    return `TODAY • ${dateStr}`;
-  if (d.getTime() === tomorrow.getTime()) return `TOMORROW • ${dateStr}`;
-  return `${dayStr} • ${dateStr}`;
 }
 
 function bufferChip(leaveAt: Date): { label: string; color: string; bg: string } {
@@ -75,21 +60,31 @@ const STATUS_CFG: Record<string, { label: string; color: string; bg: string }> =
   on_time:   { label: "On Time",      color: C.success,  bg: `${C.success}18`  },
 };
 
-// ─── Looked-up flight shape ───────────────────────────────────────────────────
+// ─── Normalized flight shape (mirrors app/api/flights/lookup) ─────────────────
 
-interface LookedUpFlight {
-  flightNumber:  string;
-  airline:       string;
-  airlineName:   string;
-  origin:        string;
-  destination:   string;
-  departureTime: string;
-  arrivalTime:   string;
-  terminal:      string | null;
-  gate:          string | null;
-  duration:      string;
-  isMock:        boolean;
+interface NormalizedFlight {
+  flightNumber:        string;
+  airline:             string;
+  airlineName:         string | null;
+  departure_airport:   string | null;
+  departure_time:      string | null;
+  departure_scheduled: string | null;
+  departure_estimated: string | null;
+  departure_actual:    string | null;
+  departure_timezone:  string | null;
+  arrival_airport:     string | null;
+  arrival_time:        string | null;
+  arrival_scheduled:   string | null;
+  arrival_estimated:   string | null;
+  arrival_actual:      string | null;
+  arrival_timezone:    string | null;
+  status:              string;
+  gate:                string | null;
+  terminal:            string | null;
+  raw:                 unknown;
 }
+
+const TEAL = "#00D4B8";
 
 // ─── Pill chip ────────────────────────────────────────────────────────────────
 
@@ -120,7 +115,7 @@ function TripCard({ trip, onSelect }: { trip: Trip; onSelect: (t: Trip) => void 
     >
       {hasDep && (
         <p className="text-[11px] font-bold uppercase tracking-wider mb-2 ml-1" style={{ color: C.secondary }}>
-          {dateLabel(trip.departure_time!)}
+          {fmtDayLabel(trip.departure_time!, trip.departure_timezone)}
         </p>
       )}
       <div
@@ -141,12 +136,27 @@ function TripCard({ trip, onSelect }: { trip: Trip; onSelect: (t: Trip) => void 
           </p>
 
           {/* Time */}
-          {hasDep && (
-            <p className="text-sm mb-3" style={{ color: C.secondary }}>
-              {fmtTime(trip.departure_time!)}
-              {trip.boarding_time ? ` – ${fmtTime(trip.boarding_time)}` : ""}
-            </p>
-          )}
+          {hasDep && (() => {
+            const { effectiveStr, scheduledStr, deltaLabel } = resolveFlightTime(
+              trip.departure_scheduled ?? trip.departure_time,
+              trip.departure_estimated,
+              trip.departure_actual,
+              trip.departure_timezone,
+              { showTzLabel: true },
+            );
+            return (
+              <p className="text-sm mb-3" style={{ color: C.secondary }}>
+                {effectiveStr}
+                {scheduledStr && (
+                  <> <s style={{ opacity: 0.45 }}>{scheduledStr}</s></>
+                )}
+                {deltaLabel && (
+                  <span className="ml-1 text-[11px] font-semibold" style={{ color: C.danger }}> {deltaLabel}</span>
+                )}
+                {trip.boarding_time ? ` – ${fmtFlightTime(trip.boarding_time, trip.departure_timezone)}` : ""}
+              </p>
+            );
+          })()}
 
           {/* Status */}
           <div className="flex items-center gap-2 flex-wrap">
@@ -157,7 +167,7 @@ function TripCard({ trip, onSelect }: { trip: Trip; onSelect: (t: Trip) => void 
           {leaveAt && buffer && (
             <div className="flex items-center gap-2 mt-3">
               <span className="text-[12px] font-semibold" style={{ color: C.primary }}>
-                Leave by {fmtTime(leaveAt.toISOString())}
+                Leave by {fmtFlightTime(leaveAt.toISOString(), trip.departure_timezone)}
               </span>
               <span
                 className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
@@ -209,7 +219,7 @@ function WidgetPreview({ trip }: { trip: Trip | null }) {
             </p>
             {leaveAt && (
               <p className="text-xl font-bold mt-2" style={{ color: C.primary }}>
-                Leave by {fmtTime(leaveAt.toISOString())}
+                Leave by {fmtFlightTime(leaveAt.toISOString(), trip.departure_timezone)}
               </p>
             )}
           </div>
@@ -316,59 +326,60 @@ function TravelCompanion() {
 // ─── Add Flight Modal ─────────────────────────────────────────────────────────
 
 interface AddModalProps {
-  user: User;
   onClose: () => void;
   onSaved: (trip: Trip) => void;
 }
 
-function AddFlightModal({ user, onClose, onSaved }: AddModalProps) {
-  const [tab, setTab]         = useState<"enter" | "scan">("enter");
-  const [flight, setFlight]   = useState("");
-  const [date, setDate]       = useState(todayISO());
-  const [seat, setSeat]       = useState("");
-  const [looking, setLooking] = useState(false);
-  const [found, setFound]     = useState<LookedUpFlight | null>(null);
-  const [lookErr, setLookErr] = useState("");
-  const [saving, setSaving]   = useState(false);
-  const [saveErr, setSaveErr] = useState("");
+function AddFlightModal({ onClose, onSaved }: AddModalProps) {
+  const [tab, setTab]             = useState<"enter" | "scan">("enter");
+  const [flight, setFlight]       = useState("");
+  const [date, setDate]           = useState(todayISO());
+  const [seat, setSeat]           = useState("");
+  const [looking, setLooking]     = useState(false);
+  const [results, setResults]     = useState<NormalizedFlight[]>([]);
+  const [selected, setSelected]   = useState<NormalizedFlight | null>(null);
+  const [lookErr, setLookErr]     = useState("");
+  const [isSample, setIsSample]   = useState(false);
+  const [saving, setSaving]       = useState(false);
+  const [saveErr, setSaveErr]     = useState("");
 
   const setTripInStore = useStore((s) => s.setTrip);
   const setTripId      = useStore((s) => s.setTripId);
 
   async function lookup() {
     if (!flight.trim() || !date) return;
-    setLooking(true); setLookErr(""); setFound(null);
-    const r = await fetch(`/api/flight-lookup?flight=${encodeURIComponent(flight.trim())}&date=${date}`);
+    setLooking(true); setLookErr(""); setResults([]); setSelected(null); setIsSample(false);
+    const r = await fetch(
+      `/api/flights/lookup?flight=${encodeURIComponent(flight.trim())}&date=${date}`
+    );
     const d = await r.json();
     setLooking(false);
     if (!r.ok) { setLookErr(d.error ?? "Lookup failed"); return; }
-    setFound(d as LookedUpFlight);
+    setIsSample(!!d.isSample);
+    if (d.multiple) {
+      setResults(d.flights as NormalizedFlight[]);
+    } else {
+      const single = d.flight as NormalizedFlight;
+      setResults([single]);
+      setSelected(single);
+    }
   }
 
   async function save() {
-    if (!found) return;
+    if (!selected) return;
     setSaving(true); setSaveErr("");
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("trips")
-      .insert({
-        user_id:        user.id,
-        flight_number:  found.flightNumber,
-        airline:        found.airline,
-        origin:         found.origin,
-        destination:    found.destination,
-        departure_time: found.departureTime,
-        terminal:       found.terminal ?? null,
-        gate:           found.gate ?? null,
-        seat:           seat.trim() || null,
-        status:         "scheduled",
-      })
-      .select()
-      .single();
-    if (error || !data) { setSaveErr(error?.message ?? "Save failed"); setSaving(false); return; }
-    setTripId(data.id);
-    setTripInStore(data);
-    onSaved(data);
+    const r = await fetch("/api/flights/save", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ flight: { ...selected, seat: seat.trim() || null } }),
+    });
+    const d = await r.json();
+    setSaving(false);
+    if (!r.ok) { setSaveErr(d.error ?? "Save failed"); return; }
+    const trip = d.trip as Trip;
+    setTripId(trip.id);
+    setTripInStore(trip);
+    onSaved(trip);
   }
 
   const inp: React.CSSProperties = {
@@ -380,12 +391,12 @@ function AddFlightModal({ user, onClose, onSaved }: AddModalProps) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
-      style={{ background: "rgba(13,27,42,0.55)", backdropFilter: "blur(6px)" }}
+      style={{ background: "rgba(7,16,31,0.65)", backdropFilter: "blur(6px)" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
         className="w-full sm:max-w-md rounded-3xl overflow-hidden"
-        style={{ backgroundColor: C.card, boxShadow: "0 32px 80px rgba(0,0,0,0.22)" }}
+        style={{ backgroundColor: C.card, boxShadow: "0 32px 80px rgba(0,0,0,0.28)" }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-6 pb-4">
@@ -428,7 +439,7 @@ function AddFlightModal({ user, onClose, onSaved }: AddModalProps) {
                   onChange={(e) => setFlight(e.target.value.toUpperCase())}
                   placeholder="e.g. AA1234"
                   style={inp}
-                  onFocus={(e) => (e.target.style.borderColor = C.primary)}
+                  onFocus={(e) => (e.target.style.borderColor = TEAL)}
                   onBlur={(e)  => (e.target.style.borderColor = C.border)}
                   onKeyDown={(e) => e.key === "Enter" && lookup()}
                 />
@@ -441,7 +452,7 @@ function AddFlightModal({ user, onClose, onSaved }: AddModalProps) {
                   type="date" value={date} min={todayISO()}
                   onChange={(e) => setDate(e.target.value)}
                   style={inp}
-                  onFocus={(e) => (e.target.style.borderColor = C.primary)}
+                  onFocus={(e) => (e.target.style.borderColor = TEAL)}
                   onBlur={(e)  => (e.target.style.borderColor = C.border)}
                 />
               </div>
@@ -454,7 +465,7 @@ function AddFlightModal({ user, onClose, onSaved }: AddModalProps) {
                   onChange={(e) => setSeat(e.target.value.toUpperCase())}
                   placeholder="e.g. 22A"
                   style={inp}
-                  onFocus={(e) => (e.target.style.borderColor = C.primary)}
+                  onFocus={(e) => (e.target.style.borderColor = TEAL)}
                   onBlur={(e)  => (e.target.style.borderColor = C.border)}
                 />
               </div>
@@ -468,54 +479,113 @@ function AddFlightModal({ user, onClose, onSaved }: AddModalProps) {
                 </div>
               )}
 
-              {!found && (
+              {/* Look-up button — hidden once results arrive */}
+              {results.length === 0 && (
                 <button
                   onClick={lookup}
                   disabled={!flight.trim() || !date || looking}
                   className="w-full rounded-full py-3 text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-40"
-                  style={{ backgroundColor: `${C.primary}12`, color: C.primary, border: `1.5px solid ${C.primary}30` }}
+                  style={{ backgroundColor: `${TEAL}18`, color: TEAL, border: `1.5px solid ${TEAL}40` }}
                 >
                   {looking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                   {looking ? "Looking up…" : "Look up flight"}
                 </button>
               )}
 
-              {found && (
+              {/* Multiple-match picker */}
+              {results.length > 1 && !selected && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold" style={{ color: C.secondary }}>
+                    Multiple flights found — select yours:
+                  </p>
+                  {results.map((f, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setSelected(f)}
+                      className="w-full text-left rounded-2xl px-4 py-3 transition-all hover:scale-[1.01] active:scale-[0.99]"
+                      style={{ border: `1.5px solid ${C.border}`, backgroundColor: "#F7F9FC" }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-bold" style={{ color: C.text }}>
+                          {f.departure_airport ?? "—"} → {f.arrival_airport ?? "—"}
+                        </span>
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ backgroundColor: `${TEAL}18`, color: TEAL }}>
+                          {f.flightNumber}
+                        </span>
+                      </div>
+                      {f.departure_time && (
+                        <p className="text-xs mt-1" style={{ color: C.secondary }}>
+                          {fmtFlightDate(f.departure_time, f.departure_timezone)}
+                          {" · "}{fmtFlightTime(f.departure_time, f.departure_timezone, { showTzLabel: true })}
+                          {f.arrival_time ? ` → ${fmtFlightTime(f.arrival_time, f.arrival_timezone, { showTzLabel: true })}` : ""}
+                        </p>
+                      )}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => { setResults([]); setSelected(null); setFlight(""); }}
+                    className="text-xs"
+                    style={{ color: C.secondary }}
+                  >
+                    ← Search again
+                  </button>
+                </div>
+              )}
+
+              {/* Selected flight confirmation card */}
+              {selected && (
                 <div
                   className="rounded-2xl p-4 space-y-2"
-                  style={{ backgroundColor: "#F7F9FC", border: `1px solid ${C.border}` }}
+                  style={{ backgroundColor: "#F7F9FC", border: `1.5px solid ${TEAL}40` }}
                 >
-                  {found.isMock && (
-                    <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: C.warning }}>
-                      Mock data — live lookup coming soon
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-base font-bold" style={{ color: C.text }}>
+                      {selected.departure_airport ?? "—"} → {selected.arrival_airport ?? "—"}
+                    </span>
+                    <span className="text-sm font-bold shrink-0 px-2 py-0.5 rounded-full" style={{ backgroundColor: `${TEAL}18`, color: TEAL }}>
+                      {selected.flightNumber}
+                    </span>
+                  </div>
+                  {selected.airlineName && (
+                    <p className="text-sm" style={{ color: C.secondary }}>{selected.airlineName}</p>
+                  )}
+                  {selected.departure_time && (
+                    <p className="text-sm" style={{ color: C.secondary }}>
+                      {fmtFlightDate(selected.departure_time, selected.departure_timezone)}
+                      {" · "}{fmtFlightTime(selected.departure_time, selected.departure_timezone, { showTzLabel: true })}
+                      {selected.arrival_time ? ` → ${fmtFlightTime(selected.arrival_time, selected.arrival_timezone, { showTzLabel: true })}` : ""}
                     </p>
                   )}
-                  <div className="flex justify-between items-start">
-                    <span className="text-base font-bold" style={{ color: C.text }}>
-                      {found.origin} → {found.destination}
-                    </span>
-                    <span className="text-sm font-bold" style={{ color: C.primary }}>{found.flightNumber}</span>
-                  </div>
-                  <p className="text-sm" style={{ color: C.secondary }}>
-                    {new Date(found.departureTime).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
-                    {" · "}{fmtTime(found.departureTime)}
-                    {found.duration && ` · ${found.duration}`}
-                  </p>
+                  {results.length > 1 && (
+                    <button
+                      onClick={() => setSelected(null)}
+                      className="text-xs"
+                      style={{ color: C.secondary }}
+                    >
+                      ← Choose different flight
+                    </button>
+                  )}
+                  {isSample && (
+                    <p className="text-[11px] text-center py-1" style={{ color: C.secondary }}>
+                      Using sample data — flight details may not reflect your actual flight
+                    </p>
+                  )}
                   {saveErr && (
                     <div
                       className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs"
                       style={{ backgroundColor: `${C.danger}10`, color: C.danger }}
                     >
-                      <AlertCircle className="h-3.5 w-3.5" />{saveErr}
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />{saveErr}
                     </div>
                   )}
                   <button
-                    onClick={save} disabled={saving}
+                    onClick={save}
+                    disabled={saving}
                     className="w-full rounded-full py-2.5 text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-40 mt-1"
-                    style={{ backgroundColor: C.primary, color: "#FFFFFF" }}
+                    style={{ backgroundColor: TEAL, color: "#FFFFFF", boxShadow: `0 4px 14px ${TEAL}50` }}
                   >
                     {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                    {saving ? "Saving…" : "Save Flight"}
+                    {saving ? "Saving…" : "Confirm & Save Flight"}
                   </button>
                 </div>
               )}
@@ -728,7 +798,6 @@ export default function DashboardPage() {
 
       {showModal && user && (
         <AddFlightModal
-          user={user}
           onClose={() => setShowModal(false)}
           onSaved={(t) => {
             setTrips((prev) =>
@@ -739,6 +808,7 @@ export default function DashboardPage() {
               ),
             );
             setShowModal(false);
+            router.push(`/trip/${t.id}`);
           }}
         />
       )}

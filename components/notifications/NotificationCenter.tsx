@@ -1,170 +1,199 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { X, Bell, AlertTriangle, CheckCircle, Plane, Clock, BellOff } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertTriangle, Bell, BellOff, Clock, MapPin, Plane, X } from "lucide-react";
 
-interface AppNotification {
-  id: string;
-  type: "leave_now" | "traffic" | "tsa_drop" | "boarding" | "alarm" | "urgent" | "warning" | "info";
-  title: string;
-  subtitle: string;
-  time: Date;
-  dismissed: boolean;
+// ─── Design tokens ────────────────────────────────────────────────
+
+const NAVY  = "#07101F";
+const TEAL  = "#00D4B8";
+const GRAY  = "#6B7A90"; // BottomNav inactive color
+
+// ─── Types ────────────────────────────────────────────────────────
+
+type NotifType = "delay" | "gate_change" | "cancellation" | "leave_soon";
+
+interface DbNotification {
+  id:         string;
+  user_id:    string;
+  trip_id:    string | null;
+  type:       NotifType | string | null;
+  title:      string | null;
+  body:       string | null;
+  read:       boolean;
+  created_at: string;
 }
 
-const TYPE_META: Record<AppNotification["type"], { icon: React.ElementType; color: string; bg: string; border: string }> = {
-  leave_now: { icon: Clock,          color: "#EF4444", bg: "rgba(239,68,68,0.06)",    border: "rgba(239,68,68,0.18)"   },
-  traffic:   { icon: AlertTriangle,  color: "#EF4444", bg: "rgba(239,68,68,0.05)",    border: "rgba(239,68,68,0.15)"   },
-  tsa_drop:  { icon: CheckCircle,    color: "#10B981", bg: "rgba(16,185,129,0.06)",   border: "rgba(16,185,129,0.18)"  },
-  boarding:  { icon: Plane,          color: "#4F46E5", bg: "rgba(79,70,229,0.06)",    border: "rgba(79,70,229,0.18)"   },
-  alarm:     { icon: Bell,           color: "#4F46E5", bg: "rgba(79,70,229,0.06)",    border: "rgba(79,70,229,0.18)"   },
-  urgent:    { icon: AlertTriangle,  color: "#EF4444", bg: "rgba(239,68,68,0.06)",    border: "rgba(239,68,68,0.18)"   },
-  warning:   { icon: AlertTriangle,  color: "#F59E0B", bg: "rgba(245,158,11,0.06)",   border: "rgba(245,158,11,0.18)"  },
-  info:      { icon: Bell,           color: "#4F46E5", bg: "rgba(79,70,229,0.06)",    border: "rgba(79,70,229,0.18)"   },
+// ─── Type config ─────────────────────────────────────────────────
+
+const TYPE_CFG: Record<string, {
+  icon:   React.ElementType;
+  color:  string;
+  bg:     string;
+  border: string;
+}> = {
+  delay:        { icon: Clock,          color: "#F5A623", bg: "#F5A62318", border: "#F5A62330" },
+  gate_change:  { icon: MapPin,         color: TEAL,      bg: `${TEAL}18`, border: `${TEAL}30` },
+  cancellation: { icon: AlertTriangle,  color: "#FF4444", bg: "#FF444418", border: "#FF444430" },
+  leave_soon:   { icon: Plane,          color: "#FF6B00", bg: "#FF6B0018", border: "#FF6B0030" },
 };
 
-function timeAgo(d: Date): string {
-  const diff = Date.now() - d.getTime();
-  const m = Math.floor(diff / 60000);
+const DEFAULT_CFG = { icon: Bell, color: GRAY, bg: "#162030", border: "#162030" };
+
+function typeCfg(type: string | null | undefined) {
+  return TYPE_CFG[type ?? ""] ?? DEFAULT_CFG;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60_000);
   if (m < 1) return "just now";
   if (m < 60) return `${m}m ago`;
   return `${Math.floor(m / 60)}h ago`;
 }
 
-function mapAlertType(type: string | null): AppNotification["type"] {
-  const t = (type ?? "").toLowerCase();
-  if (t === "urgent" || t === "leave_now") return "leave_now";
-  if (t === "warning") return "warning";
-  return "info";
-}
+// ─── Main component ───────────────────────────────────────────────
 
-interface Props {
-  userId: string;
-  tripId?: string;
-}
+export function NotificationCenter() {
+  const [notifs, setNotifs]   = useState<DbNotification[]>([]);
+  const [open, setOpen]       = useState(false);
+  const intervalRef           = useRef<ReturnType<typeof setInterval> | null>(null);
 
-export function NotificationCenter({ userId, tripId }: Props) {
-  const [notifs, setNotifs] = useState<AppNotification[]>([]);
-  const [open, setOpen]     = useState(false);
+  const fetchNotifs = useCallback(async () => {
+    try {
+      const res = await fetch("/api/notifications?limit=20");
+      if (!res.ok) return;
+      const json = await res.json() as { notifications: DbNotification[] };
+      setNotifs(json.notifications ?? []);
+    } catch {
+      // network error — keep previous state
+    }
+  }, []);
 
+  // Initial fetch + 30-second poll
   useEffect(() => {
-    const supabase = createClient();
-    const query = supabase
-      .from("alerts")
-      .select("*")
-      .eq("user_id", userId)
-      .eq("delivered", false)
-      .order("trigger_time", { ascending: false })
-      .limit(20);
+    fetchNotifs();
+    intervalRef.current = setInterval(fetchNotifs, 30_000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [fetchNotifs]);
 
-    query.then(({ data }) => {
-      if (data) {
-        setNotifs(
-          data.map((a) => ({
-            id: a.id,
-            type: mapAlertType(a.type),
-            title: a.message?.split("·")[0]?.trim() ?? "Alert",
-            subtitle: a.message?.split("·").slice(1).join("·").trim() ?? "",
-            time: new Date(a.trigger_time ?? Date.now()),
-            dismissed: false,
-          }))
-        );
-      }
-    });
+  const markRead = useCallback(async (ids: string[]) => {
+    if (!ids.length) return;
+    // Optimistic update
+    setNotifs((prev) => prev.map((n) => ids.includes(n.id) ? { ...n, read: true } : n));
+    try {
+      await fetch("/api/notifications", {
+        method:  "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ ids }),
+      });
+    } catch {
+      // Revert is handled on next poll
+    }
+  }, []);
 
-    const channel = supabase
-      .channel(`notif-center-${userId}`)
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "alerts", filter: `user_id=eq.${userId}` },
-        (payload) => {
-          const a = payload.new as { id: string; type: string | null; message: string | null; trigger_time: string | null };
-          setNotifs((prev) => [
-            {
-              id: a.id,
-              type: mapAlertType(a.type),
-              title: a.message?.split("·")[0]?.trim() ?? "Alert",
-              subtitle: a.message?.split("·").slice(1).join("·").trim() ?? "",
-              time: new Date(a.trigger_time ?? Date.now()),
-              dismissed: false,
-            },
-            ...prev,
-          ]);
-          setOpen(true);
-        }
-      )
-      .subscribe();
+  const markAllRead = useCallback(async () => {
+    setNotifs((prev) => prev.map((n) => ({ ...n, read: true })));
+    try {
+      await fetch("/api/notifications", {
+        method:  "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ all: true }),
+      });
+    } catch {
+      // Revert on next poll
+    }
+  }, []);
 
-    return () => { supabase.removeChannel(channel); };
-  }, [userId, tripId]);
-
-  function dismiss(id: string) {
-    setNotifs((prev) => prev.filter((n) => n.id !== id));
-    const supabase = createClient();
-    supabase.from("alerts").update({ delivered: true }).eq("id", id);
-  }
-
-  function dismissAll() {
-    const supabase = createClient();
-    const ids = notifs.map((n) => n.id);
-    setNotifs([]);
-    if (ids.length) supabase.from("alerts").update({ delivered: true }).in("id", ids);
-  }
-
-  const unread = notifs.length;
+  const unreadCount = notifs.filter((n) => !n.read).length;
 
   return (
     <>
-      {/* Bell button */}
+      {/* ── BottomNav tab trigger ──────────────────────────── */}
       <button
-        onClick={() => setOpen((o) => !o)}
-        className="relative p-2 rounded-xl transition-all"
-        style={{ backgroundColor: "#FFFFFF", border: "1px solid #E5E1D8" }}
+        onClick={() => setOpen(true)}
+        className="flex flex-col items-center gap-1 flex-1 py-2"
+        aria-label="Alerts"
       >
-        {unread > 0 ? (
-          <Bell className="h-5 w-5" style={{ color: "#F59E0B" }} />
-        ) : (
-          <BellOff className="h-5 w-5" style={{ color: "#9CA3AF" }} />
-        )}
-        {unread > 0 && (
-          <span
-            className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold"
-            style={{ backgroundColor: "#EF4444", color: "#FFFFFF" }}
-          >
-            {unread > 9 ? "9+" : unread}
-          </span>
-        )}
+        <div className="relative">
+          <Bell
+            strokeWidth={unreadCount > 0 ? 2.5 : 1.8}
+            className="h-[22px] w-[22px]"
+            style={{ color: unreadCount > 0 ? TEAL : GRAY }}
+          />
+          {unreadCount > 0 && (
+            <span
+              className="absolute -top-1 -right-2 h-4 min-w-[16px] px-1 rounded-full flex items-center justify-center text-[9px] font-bold"
+              style={{ backgroundColor: "#FF4444", color: "#FFFFFF" }}
+            >
+              {unreadCount > 9 ? "9+" : unreadCount}
+            </span>
+          )}
+        </div>
+        <span
+          className="text-[10px] font-semibold leading-none"
+          style={{ color: unreadCount > 0 ? TEAL : GRAY }}
+        >
+          Alerts
+        </span>
       </button>
 
-      {/* Panel */}
+      {/* ── Panel overlay ─────────────────────────────────── */}
       {open && (
         <div
-          className="fixed inset-0 z-50 flex flex-col"
-          style={{ backgroundColor: "rgba(26,26,46,0.45)", backdropFilter: "blur(12px)" }}
+          className="fixed inset-0 z-50 flex justify-center"
+          style={{ backgroundColor: "rgba(7,16,31,0.72)", backdropFilter: "blur(12px)" }}
           onClick={() => setOpen(false)}
         >
           <div
-            className="w-full max-w-md mx-auto mt-16 flex flex-col max-h-[75vh] rounded-3xl overflow-hidden"
-            style={{ margin: "64px 16px 0", maxWidth: "calc(100% - 32px)", backgroundColor: "#FFFFFF", border: "1px solid #E5E1D8", boxShadow: "0 8px 40px rgba(0,0,0,0.12)" }}
+            className="w-full flex flex-col overflow-hidden"
+            style={{
+              maxWidth: 448,
+              margin: "64px 16px 0",
+              maxHeight: "75vh",
+              borderRadius: 24,
+              backgroundColor: "#0D1B2E",
+              border: "1px solid #162030",
+              boxShadow: `0 8px 48px rgba(0,212,184,0.08)`,
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="flex items-center justify-between p-4 shrink-0" style={{ borderBottom: "1px solid #F3F4F6" }}>
-              <p className="text-sm font-bold" style={{ color: "#1A1A2E" }}>
-                Notifications{" "}
-                {unread > 0 && <span className="font-normal" style={{ color: "#9CA3AF" }}>· {unread}</span>}
+            <div
+              className="flex items-center justify-between px-5 py-4 shrink-0"
+              style={{ borderBottom: "1px solid #162030" }}
+            >
+              <p
+                className="text-sm font-bold"
+                style={{
+                  color: "#E2E8F0",
+                  fontFamily: "'Space Grotesk', sans-serif",
+                }}
+              >
+                Alerts
+                {unreadCount > 0 && (
+                  <span className="ml-2 text-[11px] font-normal" style={{ color: "#4A6580" }}>
+                    {unreadCount} unread
+                  </span>
+                )}
               </p>
-              <div className="flex items-center gap-2">
-                {unread > 0 && (
-                  <button onClick={dismissAll} className="text-xs font-medium" style={{ color: "#9CA3AF" }}>
-                    Clear all
+              <div className="flex items-center gap-3">
+                {unreadCount > 0 && (
+                  <button
+                    onClick={markAllRead}
+                    className="text-xs font-medium"
+                    style={{ color: `${TEAL}CC` }}
+                  >
+                    Mark all read
                   </button>
                 )}
                 <button
                   onClick={() => setOpen(false)}
                   className="p-1.5 rounded-lg"
-                  style={{ backgroundColor: "#F7F5F0", border: "1px solid #E5E1D8", color: "#6B7280" }}
+                  style={{ backgroundColor: "#162030", color: "#6B8DB0" }}
+                  aria-label="Close"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -172,14 +201,21 @@ export function NotificationCenter({ userId, tripId }: Props) {
             </div>
 
             {/* List */}
-            <div className="overflow-y-auto space-y-2 p-4 pb-6">
+            <div className="overflow-y-auto px-4 py-3 pb-6 space-y-2">
               {notifs.length === 0 ? (
-                <div className="py-12 text-center">
-                  <BellOff className="h-8 w-8 mx-auto mb-3" style={{ color: "#E5E1D8" }} />
-                  <p className="text-sm" style={{ color: "#9CA3AF" }}>No notifications</p>
+                <div className="py-14 text-center">
+                  <BellOff
+                    className="h-8 w-8 mx-auto mb-3"
+                    style={{ color: "#162030" }}
+                  />
+                  <p className="text-sm" style={{ color: "#4A6580" }}>
+                    All caught up
+                  </p>
                 </div>
               ) : (
-                notifs.map((n) => <NotifCard key={n.id} notif={n} onDismiss={dismiss} />)
+                notifs.map((n) => (
+                  <NotifCard key={n.id} notif={n} onMarkRead={markRead} />
+                ))
               )}
             </div>
           </div>
@@ -189,41 +225,61 @@ export function NotificationCenter({ userId, tripId }: Props) {
   );
 }
 
-function NotifCard({ notif, onDismiss }: { notif: AppNotification; onDismiss: (id: string) => void }) {
-  const meta = TYPE_META[notif.type];
-  const Icon = meta.icon;
-  const [swiping, setSwiping] = useState(false);
+// ─── Notification card ────────────────────────────────────────────
+
+function NotifCard({
+  notif,
+  onMarkRead,
+}: {
+  notif:      DbNotification;
+  onMarkRead: (ids: string[]) => void;
+}) {
+  const cfg  = typeCfg(notif.type);
+  const Icon = cfg.icon;
 
   return (
     <div
-      className="rounded-2xl p-4 flex items-start gap-3 transition-all duration-300"
+      className="rounded-2xl p-4 flex items-start gap-3 cursor-pointer"
       style={{
-        backgroundColor: meta.bg,
-        border: `1px solid ${meta.border}`,
-        opacity: swiping ? 0 : 1,
-        transform: swiping ? "translateX(60px)" : "none",
+        backgroundColor: notif.read ? "#0A1628" : cfg.bg,
+        border:          `1px solid ${notif.read ? "#162030" : cfg.border}`,
+        opacity:         notif.read ? 0.55 : 1,
+        transition:      "opacity 0.2s, background-color 0.2s",
       }}
+      onClick={() => { if (!notif.read) onMarkRead([notif.id]); }}
     >
       <div
         className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-        style={{ backgroundColor: `${meta.color}12` }}
+        style={{ backgroundColor: `${cfg.color}18` }}
       >
-        <Icon className="h-4 w-4" style={{ color: meta.color }} />
+        <Icon className="h-4 w-4" style={{ color: cfg.color }} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold" style={{ color: "#1A1A2E" }}>{notif.title}</p>
-        {notif.subtitle && (
-          <p className="text-[11px] mt-0.5" style={{ color: "#6B7280" }}>{notif.subtitle}</p>
+        <p
+          className="text-xs font-semibold leading-snug"
+          style={{ color: "#E2E8F0" }}
+        >
+          {notif.title ?? "Flight Update"}
+        </p>
+        {notif.body && (
+          <p
+            className="text-[11px] mt-1 leading-relaxed"
+            style={{ color: "#6B8DB0" }}
+          >
+            {notif.body}
+          </p>
         )}
-        <p className="text-[10px] mt-1" style={{ color: "#9CA3AF" }}>{timeAgo(notif.time)}</p>
+        <p className="text-[10px] mt-1.5" style={{ color: "#4A6580" }}>
+          {timeAgo(notif.created_at)}
+        </p>
       </div>
-      <button
-        onClick={() => { setSwiping(true); setTimeout(() => onDismiss(notif.id), 300); }}
-        className="p-1 rounded-lg shrink-0"
-        style={{ color: "#9CA3AF" }}
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
+      {!notif.read && (
+        <div
+          className="w-2 h-2 rounded-full shrink-0 mt-1"
+          style={{ backgroundColor: TEAL }}
+          aria-label="Unread"
+        />
+      )}
     </div>
   );
 }

@@ -31,9 +31,10 @@ interface Props {
 
 export function LiveStrip({ tripId, initialSteps = [] }: Props) {
   const [steps, setSteps]             = useState<ItineraryStep[]>(initialSteps);
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
+    setLastUpdated(new Date());
     const supabase = createClient();
     const channel = supabase
       .channel(`live-strip-${tripId}`)
@@ -68,7 +69,7 @@ export function LiveStrip({ tripId, initialSteps = [] }: Props) {
       <div className="flex items-center gap-1.5 px-0.5">
         <RefreshCw className="h-3 w-3" style={{ color: "#9CA3AF" }} />
         <span className="text-[10px] font-medium" style={{ color: "#9CA3AF" }}>
-          Updated {lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          Updated {lastUpdated?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) ?? "—"}
         </span>
       </div>
     </div>

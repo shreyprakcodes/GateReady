@@ -1,5 +1,7 @@
 "use client";
 
+import { useState, useEffect } from "react";
+
 interface Window {
   comfortable: string;
   tight: string;
@@ -8,11 +10,15 @@ interface Window {
 
 interface Props {
   departureWindow: Window | null;
-  boardingTime: string | null;
+  boardingTime:    string | null;
+  departureTz?:    string | null;
 }
 
-function fmt(iso: string) {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function fmt(iso: string, tz?: string | null) {
+  return new Date(iso).toLocaleTimeString("en-US", {
+    hour: "2-digit", minute: "2-digit",
+    ...(tz ? { timeZone: tz } : {}),
+  });
 }
 
 function classify(window: Window): "comfortable" | "tight" | "cutting" {
@@ -22,7 +28,10 @@ function classify(window: Window): "comfortable" | "tight" | "cutting" {
   return "cutting";
 }
 
-export function DepartureWindow({ departureWindow, boardingTime }: Props) {
+export function DepartureWindow({ departureWindow, boardingTime, departureTz }: Props) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   if (!departureWindow) {
     return (
       <div
@@ -39,12 +48,15 @@ export function DepartureWindow({ departureWindow, boardingTime }: Props) {
     );
   }
 
-  const state = classify(departureWindow);
+  // classify() uses Date.now() and fmt() uses the local timezone — both unsafe on SSR.
+  // Defer both until the component is mounted on the client.
+  const f     = mounted ? (iso: string) => fmt(iso, departureTz) : (_: string) => "—";
+  const state = mounted ? classify(departureWindow) : "comfortable";
 
   const segments = [
-    { key: "comfortable", label: "Comfortable", time: fmt(departureWindow.comfortable), barColor: "#10B981", textColor: "#10B981", flex: 3, active: state === "comfortable" },
-    { key: "tight",       label: "Tight",       time: fmt(departureWindow.tight),       barColor: "#F59E0B", textColor: "#F59E0B", flex: 2, active: state === "tight"       },
-    { key: "cutting",     label: "Cutting It",  time: fmt(departureWindow.cutoff),      barColor: "#EF4444", textColor: "#EF4444", flex: 1, active: state === "cutting"     },
+    { key: "comfortable", label: "Comfortable", time: f(departureWindow.comfortable), barColor: "#10B981", textColor: "#10B981", flex: 3, active: state === "comfortable" },
+    { key: "tight",       label: "Tight",       time: f(departureWindow.tight),       barColor: "#F59E0B", textColor: "#F59E0B", flex: 2, active: state === "tight"       },
+    { key: "cutting",     label: "Cutting It",  time: f(departureWindow.cutoff),      barColor: "#EF4444", textColor: "#EF4444", flex: 1, active: state === "cutting"     },
   ];
 
   const activeColor = state === "comfortable" ? "#10B981" : state === "tight" ? "#F59E0B" : "#EF4444";
@@ -86,13 +98,13 @@ export function DepartureWindow({ departureWindow, boardingTime }: Props) {
 
       {boardingTime && (
         <p className="mt-4 text-[11px]" style={{ color: "#9CA3AF" }}>
-          Boards {fmt(boardingTime)} · Leave by{" "}
+          Boards {f(boardingTime)} · Leave by{" "}
           <span className="font-semibold" style={{ color: activeColor }}>
             {state === "comfortable"
-              ? fmt(departureWindow.comfortable)
+              ? f(departureWindow.comfortable)
               : state === "tight"
-              ? fmt(departureWindow.tight)
-              : fmt(departureWindow.cutoff)}
+              ? f(departureWindow.tight)
+              : f(departureWindow.cutoff)}
           </span>
         </p>
       )}

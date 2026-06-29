@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { Plane, X, Users, Check, Luggage, Ticket, ChevronRight } from "lucide-react";
 import type { Database } from "@/lib/supabase/types";
 import { useFamilyStore } from "@/src/store/familyStore";
+import { resolveFlightTime } from "@/lib/utils/time";
 
 type Trip = Database["public"]["Tables"]["trips"]["Row"];
 
@@ -98,6 +100,7 @@ interface SheetProps {
   sharedIds: Set<string>;
   onShare: (id: string, name: string) => void;
   tz: string | null;
+  arrivalTz: string | null;
   arrivalTime: string | null;
   duration: string | null;
   baggageClaim: string | null;
@@ -108,11 +111,11 @@ function SheetDivider() {
   return <div style={{ height: 1, backgroundColor: "#F3F4F6" }} />;
 }
 
-function SheetRow({ label, value }: { label: string; value: string }) {
+function SheetRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-center justify-between py-3" style={{ borderBottom: "1px solid #F3F4F6" }}>
       <span className="text-xs font-medium uppercase tracking-wide" style={{ color: "#9CA3AF" }}>{label}</span>
-      <span className="text-sm font-semibold" style={{ color: "#1A1A2E" }}>{value}</span>
+      <span className="text-sm font-semibold text-right" style={{ color: "#1A1A2E" }}>{value}</span>
     </div>
   );
 }
@@ -121,7 +124,7 @@ function FlightDetailSheet({
   trip, open, dragY, isDragging,
   onClose, onHandlePointerDown, onHandlePointerMove, onHandlePointerUp,
   members, sharedIds, onShare,
-  tz, arrivalTime, duration, baggageClaim, status,
+  tz, arrivalTz, arrivalTime, duration, baggageClaim, status,
 }: SheetProps) {
   return (
     <>
@@ -210,14 +213,39 @@ function FlightDetailSheet({
               <p style={{ fontFamily: "var(--font-playfair), serif", fontSize: 40, fontWeight: 700, color: "#1A1A2E", lineHeight: 1 }}>
                 {trip.destination ?? "—"}
               </p>
-              <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>{fmtTime(arrivalTime, tz)} arrive</p>
+              <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>{fmtTime(arrivalTime, arrivalTz)} arrive</p>
             </div>
           </div>
 
           {/* Times */}
           <div className="mb-4">
-            <SheetRow label="Departure" value={fmtTime(trip.departure_time, tz)} />
-            <SheetRow label="Arrival"   value={fmtTime(arrivalTime, tz)} />
+            {(() => {
+              const { effectiveStr, scheduledStr, deltaLabel } = resolveFlightTime(
+                trip.departure_scheduled ?? trip.departure_time,
+                trip.departure_estimated,
+                trip.departure_actual,
+                tz,
+              );
+              return (
+                <SheetRow
+                  label="Departure"
+                  value={
+                    <span>
+                      {effectiveStr}
+                      {scheduledStr && (
+                        <> <s style={{ opacity: 0.45 }}>{scheduledStr}</s></>
+                      )}
+                      {deltaLabel && (
+                        <span className="ml-1 text-[11px] font-semibold" style={{ color: "#F59E0B" }}>
+                          {deltaLabel}
+                        </span>
+                      )}
+                    </span>
+                  }
+                />
+              );
+            })()}
+            <SheetRow label="Arrival"   value={fmtTime(arrivalTime, arrivalTz)} />
             {duration && <SheetRow label="Duration"  value={duration} />}
           </div>
 
@@ -333,15 +361,14 @@ export function FlightCard({ trip }: { trip: Trip }) {
 
   const members = useFamilyStore((s) => s.members);
 
-  const raw = trip.raw_boarding_pass as {
-    departure_timezone?: string;
-    arrival_time?: string;
-    baggage_claim?: string;
-  } | null;
+  // departure_timezone / destination_timezone are first-class DB columns.
+  // raw_boarding_pass only carries non-columnar extras like baggage_claim.
+  const raw = trip.raw_boarding_pass as { baggage_claim?: string } | null;
 
-  const tz           = raw?.departure_timezone ?? null;
-  const arrivalTime  = raw?.arrival_time ?? null;
-  const baggageClaim = raw?.baggage_claim ?? null;
+  const tz           = trip.departure_timezone   ?? null;
+  const arrivalTz    = trip.destination_timezone ?? null;
+  const arrivalTime  = trip.arrival_time         ?? null;
+  const baggageClaim = raw?.baggage_claim        ?? null;
   const duration     = trip.departure_time && arrivalTime
     ? fmtDuration(trip.departure_time, arrivalTime) : null;
 
@@ -581,6 +608,7 @@ export function FlightCard({ trip }: { trip: Trip }) {
         sharedIds={sharedIds}
         onShare={handleShare}
         tz={tz}
+        arrivalTz={arrivalTz}
         arrivalTime={arrivalTime}
         duration={duration}
         baggageClaim={baggageClaim}

@@ -22,6 +22,8 @@ export interface FlightStatusData {
   arrActual: string | null;
   aircraft: string | null;
   delayMinutes: number | null;
+  depTimezone: string | null;
+  arrTimezone: string | null;
   live: { lat: number; lng: number; altitude: number; speed: number } | null;
 }
 
@@ -105,6 +107,8 @@ export async function GET(request: NextRequest) {
       arrActual: arr.actual ?? null,
       aircraft: flight.aircraft?.iata ?? null,
       delayMinutes,
+      depTimezone: dep.timezone ?? null,
+      arrTimezone: arr.timezone ?? null,
       live: flight.live
         ? { lat: flight.live.latitude, lng: flight.live.longitude, altitude: flight.live.altitude, speed: flight.live.speed_horizontal }
         : null,

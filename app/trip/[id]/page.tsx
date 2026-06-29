@@ -6,14 +6,19 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   ArrowLeft, Plane, Clock, Shield, Navigation,
-  BarChart2, Share2, Bell, RefreshCw, Loader2, AlertCircle,
+  BarChart2, Bell, RefreshCw, Loader2, AlertCircle,
   MapPin, ChevronRight,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useStore } from "@/lib/store/useStore";
 import { useTsaWaitTime } from "@/src/hooks/useTsaWaitTime";
+import type { ReactNode } from "react";
 import { BottomNav } from "@/components/dashboard/BottomNav";
+import { LeaveNowCard } from "@/components/dashboard/LeaveNowCard";
+import { MilestonePanel } from "@/components/trip/MilestonePanel";
+import { SharePanel } from "@/components/trip/SharePanel";
 import type { Database } from "@/lib/supabase/types";
+import { resolveFlightTime } from "@/lib/utils/time";
 
 type Trip = Database["public"]["Tables"]["trips"]["Row"];
 
@@ -47,12 +52,18 @@ const RouteMapLazy = dynamic(
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+function fmtTime(iso: string, tz?: string | null) {
+  return new Date(iso).toLocaleTimeString("en-US", {
+    hour: "numeric", minute: "2-digit",
+    ...(tz ? { timeZone: tz } : {}),
+  });
 }
 
-function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+function fmtDate(iso: string, tz?: string | null) {
+  return new Date(iso).toLocaleDateString("en-US", {
+    weekday: "long", month: "long", day: "numeric",
+    ...(tz ? { timeZone: tz } : {}),
+  });
 }
 
 function leaveByTime(depIso: string) {
@@ -61,7 +72,7 @@ function leaveByTime(depIso: string) {
 
 // ─── Smart Buffer ring ────────────────────────────────────────────────────────
 
-function SmartBuffer({ depIso }: { depIso: string | null }) {
+function SmartBuffer({ depIso, tz }: { depIso: string | null; tz?: string | null }) {
   const [pct, setPct] = useState(85);
 
   useEffect(() => {
@@ -101,7 +112,7 @@ function SmartBuffer({ depIso }: { depIso: string | null }) {
         <p className="text-sm font-bold" style={{ color }}>{label}</p>
         {depIso && (
           <p className="text-xs mt-0.5" style={{ color: C.secondary }}>
-            Leave by {fmtTime(leaveByTime(depIso).toISOString())}
+            Leave by {fmtTime(leaveByTime(depIso).toISOString(), tz)}
           </p>
         )}
       </div>
@@ -139,7 +150,7 @@ function buildJourneySteps(trip: Trip, tsaMin: number, driveMin: number): JStep[
 
 // ─── Journey step row ─────────────────────────────────────────────────────────
 
-function StepRow({ step, isLast }: { step: JStep; isLast: boolean }) {
+function StepRow({ step, isLast, tz }: { step: JStep; isLast: boolean; tz?: string | null }) {
   return (
     <div className="flex gap-4">
       <div className="flex flex-col items-center">
@@ -162,7 +173,7 @@ function StepRow({ step, isLast }: { step: JStep; isLast: boolean }) {
             {step.label}
           </p>
           <span className="text-sm font-bold shrink-0" style={{ color: step.done ? C.secondary : C.primary }}>
-            {fmtTime(step.time.toISOString())}
+            {fmtTime(step.time.toISOString(), tz)}
           </span>
         </div>
         <p className="text-xs mt-0.5" style={{ color: C.secondary }}>{step.detail}</p>
@@ -279,7 +290,7 @@ export default function TripDetailPage() {
               </h1>
               <p className="text-xs truncate" style={{ color: C.secondary }}>
                 {[trip.airline, trip.flight_number].filter(Boolean).join(" ")}
-                {trip.departure_time && ` · ${fmtDate(trip.departure_time)}`}
+                {trip.departure_time && ` · ${fmtDate(trip.departure_time, trip.departure_timezone)}`}
               </p>
             </div>
           </div>
@@ -308,30 +319,11 @@ export default function TripDetailPage() {
           {/* ── Tab: Itinerary ────────────────────────────────────────────── */}
           {tab === "Itinerary" && (
             <div className="space-y-5">
-              {/* Hero card */}
-              <div
-                className="rounded-2xl p-5"
-                style={{ backgroundColor: C.card, boxShadow: SHADOW, border: `1px solid ${C.border}` }}
-              >
-                <div className="flex items-center justify-between gap-6 flex-wrap">
-                  <div>
-                    <p className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: C.secondary }}>
-                      Leave by
-                    </p>
-                    {trip.departure_time ? (
-                      <p className="text-3xl font-bold" style={{ color: C.primary }}>
-                        {fmtTime(leaveByTime(trip.departure_time).toISOString())}
-                      </p>
-                    ) : (
-                      <p className="text-xl font-bold" style={{ color: C.secondary }}>—</p>
-                    )}
-                    <p className="text-xs mt-1" style={{ color: C.secondary }}>
-                      Departure at {trip.departure_time ? fmtTime(trip.departure_time) : "—"}
-                    </p>
-                  </div>
-                  <SmartBuffer depIso={trip.departure_time} />
-                </div>
-              </div>
+              {/* Leave Now Engine card */}
+              <LeaveNowCard />
+
+              {/* Travel day progress — tap each step as you reach it */}
+              <MilestonePanel tripId={trip.id} />
 
               {/* Journey timeline */}
               <div
@@ -345,7 +337,7 @@ export default function TripDetailPage() {
                   <p className="text-sm" style={{ color: C.secondary }}>No departure time set</p>
                 ) : (
                   journeySteps.map((step, i) => (
-                    <StepRow key={i} step={step} isLast={i === journeySteps.length - 1} />
+                    <StepRow key={i} step={step} isLast={i === journeySteps.length - 1} tz={trip.departure_timezone} />
                   ))
                 )}
               </div>
@@ -467,8 +459,8 @@ export default function TripDetailPage() {
                 </p>
                 <FlightInfoRow label="Flight"     value={[trip.airline, trip.flight_number].filter(Boolean).join(" ") || "—"} />
                 <FlightInfoRow label="Route"      value={[trip.origin, trip.destination].filter(Boolean).join(" → ") || "—"} />
-                <FlightInfoRow label="Departure"  value={trip.departure_time ? `${fmtDate(trip.departure_time)}, ${fmtTime(trip.departure_time)}` : "—"} />
-                <FlightInfoRow label="Boarding"   value={trip.boarding_time ? fmtTime(trip.boarding_time) : "—"} />
+                <DepartureInfoRow trip={trip} />
+                <FlightInfoRow label="Boarding"   value={trip.boarding_time ? fmtTime(trip.boarding_time, trip.departure_timezone) : "—"} />
                 <FlightInfoRow label="Terminal"   value={trip.terminal ?? "—"} />
                 <FlightInfoRow label="Gate"       value={trip.gate ?? "—"} />
                 <FlightInfoRow label="Seat"       value={trip.seat ?? "—"} />
@@ -533,18 +525,15 @@ export default function TripDetailPage() {
                 <p className="text-[11px] font-bold uppercase tracking-wider mb-4" style={{ color: C.secondary }}>
                   Smart Buffer
                 </p>
-                <SmartBuffer depIso={trip.departure_time} />
+                <SmartBuffer depIso={trip.departure_time} tz={trip.departure_timezone} />
               </div>
 
-              {/* Share trip */}
-              <button
-                className="w-full flex items-center gap-3 rounded-2xl p-4 transition-all active:scale-[0.98]"
-                style={{ backgroundColor: C.card, boxShadow: SHADOW, border: `1px solid ${C.border}` }}
-              >
-                <Share2 className="h-5 w-5" style={{ color: C.primary }} />
-                <span className="text-sm font-semibold" style={{ color: C.text }}>Share Trip Details</span>
-                <ChevronRight className="h-4 w-4 ml-auto" style={{ color: C.secondary }} />
-              </button>
+              {/* Share live status with family */}
+              <SharePanel
+                tripId={trip.id}
+                initialShareEnabled={trip.share_enabled ?? false}
+                initialToken={trip.share_token ?? ""}
+              />
 
               {/* Alerts link */}
               <button
@@ -567,7 +556,7 @@ export default function TripDetailPage() {
 
 // ─── Flight info row ──────────────────────────────────────────────────────────
 
-function FlightInfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function FlightInfoRow({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4 py-1.5" style={{ borderBottom: `1px solid ${C.border}` }}>
       <span className="text-xs" style={{ color: C.secondary }}>{label}</span>
@@ -578,5 +567,36 @@ function FlightInfoRow({ label, value, mono }: { label: string; value: string; m
         {value}
       </span>
     </div>
+  );
+}
+
+function DepartureInfoRow({ trip }: { trip: Trip }) {
+  const tz = trip.departure_timezone;
+  const { effectiveStr, scheduledStr, deltaLabel } = resolveFlightTime(
+    trip.departure_scheduled ?? trip.departure_time,
+    trip.departure_estimated,
+    trip.departure_actual,
+    tz,
+  );
+  const dateStr = trip.departure_time ? fmtDate(trip.departure_time, tz) : null;
+  return (
+    <FlightInfoRow
+      label="Departure"
+      value={
+        dateStr ? (
+          <span>
+            {dateStr}, {effectiveStr}
+            {scheduledStr && (
+              <> <s style={{ opacity: 0.45 }}>{scheduledStr}</s></>
+            )}
+            {deltaLabel && (
+              <span className="ml-1 text-[11px] font-semibold" style={{ color: "#FF4444" }}>
+                {deltaLabel}
+              </span>
+            )}
+          </span>
+        ) : "—"
+      }
+    />
   );
 }

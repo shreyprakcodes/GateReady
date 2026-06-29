@@ -7,7 +7,6 @@ import { LiveStrip } from "@/components/dashboard/LiveStrip";
 import { DepartureWindow } from "@/components/dashboard/DepartureWindow";
 import { AlertBanner } from "@/components/dashboard/AlertBanner";
 import { BottomNav } from "@/components/dashboard/BottomNav";
-import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { FlightWidget } from "@/components/widget/FlightWidget";
 import { ProfilePanel } from "@/src/components/ProfilePanel";
 import { GreetingText } from "@/components/dashboard/GreetingText";
@@ -92,7 +91,6 @@ export default async function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-2 mt-0.5">
-            <NotificationCenter userId={user.id} tripId={trip?.id} />
             <ProfilePanel userEmail={user.email ?? undefined} />
           </div>
         </div>
@@ -141,6 +139,7 @@ export default async function DashboardPage() {
         <DepartureWindow
           departureWindow={departureWindow}
           boardingTime={trip?.boarding_time ?? null}
+          departureTz={trip?.departure_timezone ?? null}
         />
 
         {/* Live flight widget */}
@@ -150,6 +149,7 @@ export default async function DashboardPage() {
             origin={trip.origin ?? undefined}
             destination={trip.destination ?? undefined}
             departureTime={trip.departure_time ?? undefined}
+            departureTimezone={trip.departure_timezone ?? null}
             compact
           />
         )}

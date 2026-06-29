@@ -28,9 +28,12 @@ function flightStage(status: FlightStatusData["status"]): Stage {
   }
 }
 
-function fmtTime(iso: string | null): string {
+function fmtTime(iso: string | null, tz?: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleTimeString("en-US", {
+    hour: "2-digit", minute: "2-digit",
+    ...(tz ? { timeZone: tz } : {}),
+  });
 }
 
 function countdown(iso: string | null): string {
@@ -234,11 +237,13 @@ export default function FlightStatusPage() {
                 label="Departure"
                 scheduled={data.depScheduled} estimated={data.depEstimated} actual={data.depActual}
                 gate={data.depGate} terminal={data.depTerminal} delayMinutes={data.delayMinutes}
+                tz={data.depTimezone}
               />
               <TimeCard
                 label="Arrival"
                 scheduled={data.arrScheduled} estimated={data.arrEstimated} actual={data.arrActual}
                 gate={data.arrGate} terminal={data.arrTerminal}
+                tz={data.arrTimezone}
               />
             </div>
 
@@ -280,10 +285,11 @@ export default function FlightStatusPage() {
   );
 }
 
-function TimeCard({ label, scheduled, estimated, actual, gate, terminal, delayMinutes }: {
+function TimeCard({ label, scheduled, estimated, actual, gate, terminal, delayMinutes, tz }: {
   label: string;
   scheduled: string | null; estimated: string | null; actual: string | null;
   gate: string | null; terminal: string | null; delayMinutes?: number | null;
+  tz?: string | null;
 }) {
   const displayTime = actual ?? estimated ?? scheduled;
   const isDelayed   = delayMinutes && delayMinutes > 5 && !actual;
@@ -300,11 +306,11 @@ function TimeCard({ label, scheduled, estimated, actual, gate, terminal, delayMi
         className="text-xl font-bold"
         style={{ fontFamily: "var(--font-playfair), serif", color: isDelayed ? "#F59E0B" : "#1A1A2E" }}
       >
-        {fmtTime(displayTime)}
+        {fmtTime(displayTime, tz)}
       </p>
       {scheduled && estimated && estimated !== scheduled && !actual && (
         <p className="text-[10px] line-through mt-0.5" style={{ color: "#9CA3AF" }}>
-          {fmtTime(scheduled)}
+          {fmtTime(scheduled, tz)}
         </p>
       )}
       <div className="flex gap-2 mt-2">

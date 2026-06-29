@@ -4,21 +4,25 @@ import { useEffect, useState } from "react";
 import { Plane } from "lucide-react";
 
 interface Props {
-  flightNumber?: string;
-  origin?: string;
-  destination?: string;
-  departureTime?: string;
-  currentStep?: string;
-  leaveInMinutes?: number;
-  compact?: boolean;
+  flightNumber?:      string;
+  origin?:            string;
+  destination?:       string;
+  departureTime?:     string;
+  departureTimezone?: string | null;
+  currentStep?:       string;
+  leaveInMinutes?:    number;
+  compact?:           boolean;
 }
 
 function pad2(n: number): string {
   return n.toString().padStart(2, "0");
 }
 
-function fmtTime(d: Date): string {
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function fmtTime(d: Date, tz?: string | null): string {
+  return d.toLocaleTimeString("en-US", {
+    hour: "2-digit", minute: "2-digit",
+    ...(tz ? { timeZone: tz } : {}),
+  });
 }
 
 function leaveColor(mins: number): string {
@@ -27,7 +31,7 @@ function leaveColor(mins: number): string {
   return "#EF4444";
 }
 
-export function FlightWidget({ flightNumber, origin, destination, departureTime, currentStep, leaveInMinutes, compact = false }: Props) {
+export function FlightWidget({ flightNumber, origin, destination, departureTime, departureTimezone, currentStep, leaveInMinutes, compact = false }: Props) {
   const [now, setNow] = useState(new Date());
 
   useEffect(() => {
@@ -66,7 +70,7 @@ export function FlightWidget({ flightNumber, origin, destination, departureTime,
           </p>
           <p className="text-[10px]" style={{ color: "#9CA3AF" }}>
             {flightNumber ?? "—"} · {origin ?? "?"} → {destination ?? "?"}
-            {depDate ? ` · ${fmtTime(depDate)}` : ""}
+            {depDate ? ` · ${fmtTime(depDate, departureTimezone)}` : ""}
           </p>
         </div>
       </div>
@@ -121,7 +125,7 @@ export function FlightWidget({ flightNumber, origin, destination, departureTime,
             {flightNumber ?? "—"} · {origin ?? "?"} → {destination ?? "?"}
           </p>
           {depDate && (
-            <p className="text-xs mt-0.5" style={{ color: "#9CA3AF" }}>Departs {fmtTime(depDate)}</p>
+            <p className="text-xs mt-0.5" style={{ color: "#9CA3AF" }}>Departs {fmtTime(depDate, departureTimezone)}</p>
           )}
         </div>
       </div>
