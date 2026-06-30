@@ -3,10 +3,28 @@ import { createSessionClient } from "@/lib/supabase/server";
 import { getDriveTime, distanceToAirportKm } from "@/lib/api/maps";
 import { getTsaWait }    from "@/lib/api/tsa";
 import { computeLeaveTime } from "@/lib/leaveNow";
+import { computeBuffer }    from "@/lib/bufferEngine";
 
 // Straight-line km above which driving to the airport is implausible.
 // E.g. Phoenix user with a JFK flight → ~3400 km → skip live drive routing.
 const FAR_THRESHOLD_KM = 500;
+
+// Convert a UTC Date to the local hour (0–23) at the given IANA timezone.
+// Falls back to UTC if the timezone string is missing or unrecognised.
+function localDepartureHour(date: Date, timezone: string | null): number {
+  if (!timezone) return date.getUTCHours();
+  try {
+    const hourStr = new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      hour12: false,
+      timeZone: timezone,
+    }).format(date);
+    const hour = parseInt(hourStr, 10);
+    return isNaN(hour) ? date.getUTCHours() : hour % 24; // % 24 guards against "24" at midnight
+  } catch {
+    return date.getUTCHours();
+  }
+}
 
 export async function POST(request: NextRequest) {
   // ── Auth ────────────────────────────────────────────────────────
@@ -15,6 +33,14 @@ export async function POST(request: NextRequest) {
   if (authErr || !user) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // ── User profile (base buffer + engine signals + home coords) ────
+  const { data: userRow } = await client
+    .from("users")
+    .select("arrival_buffer_minutes, trip_scope, travel_stressors, home_lat, home_lng")
+    .eq("id", user.id)
+    .single();
+  const baseBufferMinutes = userRow?.arrival_buffer_minutes ?? 20;
 
   // ── Parse body (lat/lng optional; tripId optional) ───────────────
   let lat: number | undefined;
@@ -48,52 +74,107 @@ export async function POST(request: NextRequest) {
 
   const airportIata   = trip.origin ?? null;
   const departureTime = new Date(trip.departure_time);
-  const hasCoords     = typeof lat === "number" && typeof lng === "number";
+
+  // Prefer live GPS coords; fall back to saved home location from profile.
+  // When neither is available, drive time cannot be computed honestly.
+  const hasGpsCoords  = typeof lat === "number" && typeof lng === "number";
+  const hasHomeCoords = typeof userRow?.home_lat === "number" && typeof userRow?.home_lng === "number";
+  const originLat     = hasGpsCoords ? lat! : hasHomeCoords ? userRow!.home_lat! : undefined;
+  const originLng     = hasGpsCoords ? lng! : hasHomeCoords ? userRow!.home_lng! : undefined;
+  const hasOrigin     = originLat !== undefined;
+  const originSource: "gps" | "home" | "none" =
+    hasGpsCoords ? "gps" : hasHomeCoords ? "home" : "none";
+
+  // ── Rules-based buffer ──────────────────────────────────────────
+  const bufferResult = computeBuffer({
+    baseBufferMinutes,
+    departureHour:   localDepartureHour(departureTime, trip.departure_timezone ?? null),
+    airportIata,
+    tripScope:       userRow?.trip_scope       ?? null,
+    travelStressors: userRow?.travel_stressors ?? null,
+  });
 
   // ── Straight-line distance check ────────────────────────────────
   // Prevents routing a user to an airport hundreds of kilometres away,
   // which would return a correct but useless multi-day drive time.
   const distanceKm: number | null =
-    hasCoords && airportIata
-      ? distanceToAirportKm(lat!, lng!, airportIata)
+    hasOrigin && airportIata
+      ? distanceToAirportKm(originLat!, originLng!, airportIata)
       : null;
 
   const isFarFromAirport =
     distanceKm !== null && distanceKm > FAR_THRESHOLD_KM;
 
-  // Route via Maps only when: coords known + airport known + not far away.
-  // A null distanceKm (airport not in our table) still allows routing;
-  // getDriveTime's 300-min cap acts as the second-layer guard.
-  const canRoute =
-    hasCoords && !!airportIata && !isFarFromAirport;
+  // Route via Maps only when: origin known + airport known + not far away.
+  const canRoute = hasOrigin && !!airportIata && !isFarFromAirport;
+
+  // Drive is unavailable when: no usable origin, or origin is far from the airport.
+  const driveUnavailable = originSource === "none" || isFarFromAirport;
 
   // ── Fetch drive + TSA concurrently ──────────────────────────────
   const [driveResult, tsaResult] = await Promise.all([
     canRoute
-      ? getDriveTime(lat!, lng!, airportIata!)
+      ? getDriveTime(originLat!, originLng!, airportIata!)
       : Promise.resolve({ durationMinutes: 45, isLive: false }),
     getTsaWait(airportIata ?? "JFK"),
   ]);
 
-  // When far from the airport, exclude drive time from the calculation.
-  // The card will surface a clear "far away" note in the breakdown.
-  const effectiveDriveMinutes = isFarFromAirport ? 0 : driveResult.durationMinutes;
+  // Exclude drive time when unavailable — don't inject a fake number.
+  const effectiveDriveMinutes = driveUnavailable ? 0 : driveResult.durationMinutes;
 
   // ── Compute leave time ──────────────────────────────────────────
   const result = computeLeaveTime({
     departureTime,
-    driveMinutes: effectiveDriveMinutes,
-    tsaMinutes:   tsaResult.waitMinutes,
+    driveMinutes:      effectiveDriveMinutes,
+    tsaMinutes:        tsaResult.waitMinutes,
+    userBufferMinutes: bufferResult.bufferMinutes,
   });
+
+  // ── Log prediction (fire-and-forget — never blocks the response) ─
+  // Upserts on trip_id: recomputing Leave Now for the same trip refreshes the one
+  // prediction row instead of accumulating duplicates. actual_buffer_minutes is
+  // intentionally omitted here so a previously backfilled value is never overwritten.
+  // Backfill path: backfillActualBuffer() in lib/agent/learning.ts, called from
+  // runPostTripLearning after the trip completes.
+  client
+    .from("trip_predictions")
+    .upsert(
+      {
+        trip_id:                  trip.id,
+        user_id:                  user.id,
+        predicted_buffer_minutes: bufferResult.bufferMinutes,
+        rule_factors:             bufferResult.factors,
+        updated_at:               new Date().toISOString(),
+        // actual_buffer_minutes omitted — DB null on first insert, preserved on conflict
+      },
+      { onConflict: "trip_id" },
+    )
+    .then(
+      ({ error }) => {
+        if (error) {
+          console.error(
+            `[leave-now] prediction upsert failed — trip_id=${trip.id} user_id=${user.id}:`,
+            error.message,
+            error.details ?? "",
+          );
+        }
+      },
+      (err: unknown) => {
+        console.error(
+          `[leave-now] prediction upsert threw — trip_id=${trip.id} user_id=${user.id}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      },
+    );
 
   // ── Build drive note ────────────────────────────────────────────
   let driveNote: string | undefined;
-  if (isFarFromAirport && airportIata) {
+  if (originSource === "none") {
+    driveNote = "Share your location or set a home address in Settings for real drive time";
+  } else if (isFarFromAirport && airportIata) {
     driveNote = `You appear to be ${Math.round(distanceKm!)} km from ${airportIata} — drive time not factored in`;
-  } else if (!hasCoords) {
-    driveNote = "No location — using 45 min estimate";
-  } else if (!airportIata) {
-    driveNote = "Airport unknown — using 45 min estimate";
+  } else if (originSource === "home") {
+    driveNote = "Using your saved home address as starting point";
   }
 
   return Response.json({
@@ -104,9 +185,10 @@ export async function POST(request: NextRequest) {
     inputs: {
       drive: {
         minutes:     effectiveDriveMinutes,
-        isLive:      isFarFromAirport ? false : driveResult.isLive,
-        unavailable: isFarFromAirport || undefined,   // omitted (not serialized) when false
+        isLive:      driveUnavailable ? false : driveResult.isLive,
+        unavailable: driveUnavailable || undefined,
         distanceKm:  distanceKm !== null ? Math.round(distanceKm) : undefined,
+        source:      originSource,
         note:        driveNote,
       },
       tsa: {
@@ -115,7 +197,10 @@ export async function POST(request: NextRequest) {
         note:    tsaResult.note,
       },
       walkToGate: { minutes: 15 },
-      buffer:     { minutes: 20 },
+      buffer: {
+        minutes: bufferResult.bufferMinutes,
+        factors: bufferResult.factors,
+      },
     },
   });
 }

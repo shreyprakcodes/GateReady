@@ -17,13 +17,13 @@ export function BottomNav() {
   const tabs = [
     { key: "trips",    label: "Trips",    href: "/dashboard", Icon: Home },
     { key: "timeline", label: "Timeline", href: timelineHref, Icon: CalendarDays },
-    { key: "profile",  label: "Profile",  href: "/profile",   Icon: User },
+    { key: "profile",  label: "Profile",  href: "/settings",  Icon: User },
   ] as const;
 
   function active(key: string) {
     if (key === "trips")    return pathname === "/dashboard" || pathname === "/";
     if (key === "timeline") return pathname.startsWith("/trip/");
-    if (key === "profile")  return pathname.startsWith("/profile");
+    if (key === "profile")  return pathname.startsWith("/settings");
     return false;
   }
 

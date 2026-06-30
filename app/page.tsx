@@ -30,6 +30,14 @@ export default async function DashboardPage() {
 
   const supabase = createServiceClient();
 
+  // Redirect new users to onboarding before showing the dashboard
+  const { data: userRow } = await supabase
+    .from("users")
+    .select("onboarding_completed")
+    .eq("id", user.id)
+    .single();
+  if (userRow && userRow.onboarding_completed === false) redirect("/onboarding");
+
   const { data: trip } = await supabase
     .from("trips")
     .select("*")
@@ -122,7 +130,7 @@ export default async function DashboardPage() {
             <p className="text-sm font-bold mb-1" style={{ color: "#1A1A2E" }}>No upcoming trips</p>
             <p className="text-xs mb-5" style={{ color: "#9CA3AF" }}>Add a flight to get started</p>
             <Link
-              href="/onboarding"
+              href="/dashboard"
               className="inline-flex items-center gap-2 rounded-2xl px-5 py-2.5 text-sm font-semibold"
               style={{ backgroundColor: "#4F46E5", color: "#FFFFFF" }}
             >

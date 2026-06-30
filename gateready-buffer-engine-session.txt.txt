@@ -1,0 +1,1686 @@
+ ▐▛███▜▌   Claude Code v2.1.196
+▝▜█████▛▘  Sonnet 4.6 · Claude Pro
+  ▘▘ ▝▝    ~\gateready
+
+
+❯ CONTEXT                                                                       
+  Project: GateReady. Stack: Next.js 16.2.9, TypeScript, React 19, Tailwind,    
+  Supabase, Inngest, Anthropic SDK.                                             
+  IMPORTANT: This is Next.js 16 with breaking changes. Before writing code,     
+  read the relevant guide in node_modules/next/dist/docs/ — do not assume Next  
+  14 conventions. Note the middleware→proxy deprecation.                        
+                                                                                
+  CURRENT STATE                                                                 
+  Auth + 10-question onboarding flow are live. Onboarding answers are meant to  
+  persist to the user's row so the personalization layer can read them later,   
+  but saves are not reliably landing.                                           
+                                                                                
+  TASK                                                                          
+  Diagnose and fix onboarding answer persistence.                               
+                                                                                
+  - Investigate first: trace the onboarding submit handler → API route →        
+  Supabase write. Report the actual root cause before changing anything.        
+  - Check the usual suspects for this repo: (a) a migration that adds the       
+  target columns was written but never applied to the live DB, (b) RLS blocking 
+  the write, (c) a column-name / shape mismatch on insert.                      
+  - Fix the root cause. If a migration was never applied, output the exact SQL  
+  to paste into the Supabase SQL Editor AND tell me explicitly that I need to   
+  run it.                                                                       
+  - Add a guard: the submit should surface an error to the user (and console)   
+  if the write fails, instead of silently succeeding.                           
+                                                                                
+  SUCCESS                                                                       
+  Completing onboarding writes all 10 answers to the user's row; reloading the  
+  profile shows them persisted; a failed write now throws visibly instead of    
+  silently dropping.                                                            
+                                                                                
+  CONSTRAINTS                                                                   
+  Don't refactor unrelated files. Show me the diagnosis before the fix.         
+
+● I'll trace the onboarding submit handler → API route → Supabase write before
+  touching anything.
+
+  Read 2 files (ctrl+o to expand)
+
+● Now let me check the API route and the full migrations history:
+
+  Searched for 1 pattern, read 3 files (ctrl+o to expand)
+
+● Let me check migration 004 and also look for a supabase config:
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● I have everything I need for a full diagnosis. Here it is before I touch any
+  code:
+
+  ---
+  Diagnosis
+
+  Root cause #1 (primary): Migration 011 was never applied to the live database.
+
+  supabase/migrations/011_onboarding_fields.sql shows as ?? (untracked) in git —
+  it was written but never committed and almost certainly never pasted into the
+  Supabase SQL Editor. Without it, the columns arrival_buffer_minutes,
+  travel_frequency, trip_scope, travels_with, travel_stressors,
+  family_auto_updates, home_airport, and onboarding_completed don't exist in the
+  live users table. Every PATCH that tries to write them fails on the DB side
+  with "column does not exist".
+
+  Root cause #2 (secondary): The client silently swallows every error.
+
+  In save() (onboarding/page.tsx:391-402):
+  - The catch block eats the exception and navigates to dashboard anyway.
+  - More critically: fetch() only throws on network failure. An HTTP 500 from
+  the API route returns normally — the code never checks response.ok. So even if
+  Supabase returns an error, the user sees nothing wrong and gets redirected.
+
+  The API route itself (app/api/profile/route.ts:62-68) correctly propagates the
+  Supabase error as a 500 JSON response — but the client never reads it.
+
+  Root causes #3: None. RLS is fine (users: own row only policy covers UPDATE
+  via the session client), column names match exactly between buildPayload() and
+  the migration, and WRITABLE_FIELDS includes all onboarding columns. The only
+  issues are the unapplied migration and silent error swallowing.
+
+  ---
+  You need to run this SQL in your Supabase SQL Editor:
+
+  ALTER TABLE public.users
+    ADD COLUMN IF NOT EXISTS arrival_buffer_minutes  integer  NOT NULL DEFAULT
+  25,
+    ADD COLUMN IF NOT EXISTS travel_frequency        text,
+    ADD COLUMN IF NOT EXISTS trip_scope              text,
+    ADD COLUMN IF NOT EXISTS travels_with            text,
+    ADD COLUMN IF NOT EXISTS travel_stressors        text[],
+    ADD COLUMN IF NOT EXISTS family_auto_updates     boolean  NOT NULL DEFAULT
+  false,
+    ADD COLUMN IF NOT EXISTS home_airport            text,
+    ADD COLUMN IF NOT EXISTS onboarding_completed    boolean  NOT NULL DEFAULT
+  false;
+
+  -- Backfill: existing users skip onboarding; the DEFAULT false handles new 
+  sign-ups.
+  UPDATE public.users SET onboarding_completed = true;
+
+  Now I'll fix the silent error swallowing:
+
+● Update(app\onboarding\page.tsx)
+  ⎿  User rejected update to app\onboarding\page.tsx
+
+❯ CONTEXT                                                                       
+  Project: GateReady. Next.js 16.2.9, TypeScript, React 19, Tailwind, Supabase. 
+  IMPORTANT: Next.js 16 has breaking changes. Read node_modules/next/dist/docs/ 
+  before writing code — do not assume Next 14 conventions.                      
+                                                                                
+  PRECONDITION (already done by me): I have run the ALTER TABLE migration in    
+  Supabase, so the onboarding columns now exist on public.users. Do not         
+  re-output that SQL.                                                           
+                                                                                
+  You previously diagnosed: the onboarding save() swallows errors (catch eats   
+  the exception, navigates anyway, and never checks response.ok). Now fix all   
+  three issues below.                                                           
+                                                                                
+  TASK 1 — Make onboarding saves fail loudly                                    
+  - In onboarding/page.tsx save(): check response.ok, read the error JSON, set  
+  saveError, and do NOT navigate on failure.                                    
+  - Only redirect to dashboard on a confirmed successful write.                 
+                                                                                
+  TASK 2 — Profile reflects onboarding settings                                 
+  - Investigate first: does the profile page read the onboarding columns        
+  (arrival_buffer_minutes, travel_frequency, trip_scope, travels_with,          
+  travel_stressors, family_auto_updates, home_airport) from the users row?      
+  Report what it currently reads before editing.                                
+  - Make the profile/settings page display every onboarding answer the user     
+  selected, populated from their saved row.                                     
+  - Editing a value on the profile must write back to the same columns (no      
+  separate/duplicate field names).                                              
+                                                                                
+  TASK 3 — Travel Documents shows nothing                                       
+  - Investigate first: trace why the Travel Documents page renders empty.       
+  Report the root cause (no data source wired? query returns nothing? component 
+  not reading state? route not fetching?) BEFORE changing code.                 
+  - Fix so the page renders its intended content. If it depends on a            
+  table/column that doesn't exist yet, tell me the exact SQL to run rather than 
+  failing silently.                                                             
+                                                                                
+  SUCCESS                                                                       
+  - Completing onboarding persists all answers; a failed write shows an error   
+  and does NOT redirect.                                                        
+  - Profile page shows the exact selections made during onboarding, and edits   
+  persist.                                                                      
+  - Travel Documents renders its real content (or a clear empty-state if        
+  genuinely no data), never a blank page.                                       
+                                                                                
+  CONSTRAINTS                                                                   
+  Show diagnosis before each fix. Don't refactor unrelated files. One file lock 
+  issue earlier — if a write fails because the file is in use, tell me which    
+  process to close rather than retrying blindly.                                
+
+● Let me read all the relevant files in parallel before touching anything.
+
+  Searched for 1 pattern, read 5 files (ctrl+o to expand)
+
+● Now let me read the TravelStyleForm and the other key components:
+
+  Read 2 files (ctrl+o to expand)
+
+● Now I have the full picture. Let me do the diagnoses:
+
+  ---
+  Diagnosis — Task 1 (onboarding save())
+
+  Already confirmed from prior session: fetch() is awaited but its response is
+  never checked. The catch swallows network errors. Either failure silently
+  navigates to /dashboard. Fix: check response.ok, read the error JSON, set
+  state to show it, bail before redirect.
+
+  Diagnosis — Task 2 (profile reflects onboarding settings)
+
+  The plumbing is already there. settings/preferences/page.tsx fetches profile.*
+  with select("*") and passes all onboarding columns to <TravelStyleForm 
+  initialValues={...} />. TravelStyleForm renders and saves back to the same
+  column names. Nothing is missing here — once the columns exist in the DB
+  (which you've confirmed), this page will work.
+
+  The one real bug: TravelStyleForm.handleSave() (line 132) also never checks
+  response.ok — same silent swallow as the onboarding page.
+
+  Diagnosis — Task 3 (Travel Documents shows nothing)
+
+  /profile redirects to /settings/travel-docs, which is TravelDocsPage. It calls
+  GET /api/profile and renders toggles for tsa_precheck, global_entry,
+  has_real_id, has_clear, known_traveler_number, and lounge_memberships.
+
+  The root cause: those columns (has_real_id, has_clear, known_traveler_number,
+  lounge_memberships) come from migration 010, and tsa_precheck/global_entry
+  from migration 001. These all pre-date migration 011 and should exist. The
+  page itself is correct — the fetch, state wiring, and rendering are all fine.
+
+  BUT: fetchProfile silently returns on !res.ok (line 121) and leaves profile as
+  null, which renders the "Could not load profile. Try reloading." fallback —
+  not a blank page, but an empty state. If the user is seeing a truly blank
+  page, the most likely cause is either: (a) the user isn't authenticated, or
+  (b) the API is throwing before returning, meaning !res.ok fires and profile
+  stays null.
+
+  Let me check if there's something more subtle I'm missing by looking at the
+  API preferences route:
+
+  Read 2 files (ctrl+o to expand)
+
+● Let me also check the types file (it's modified in git status) and the
+  leave-now route before finalizing the diagnosis:
+
+  Read 1 file (ctrl+o to expand)
+
+● I have the complete picture. Here are the full diagnoses before any changes:
+
+  ---
+  Diagnosis — Task 1 (onboarding save())
+
+  Two bugs compound:
+  1. fetch() is awaited but the return value is discarded — response.ok is never
+  checked. An HTTP 500 looks identical to a 200 from the caller's perspective.
+  2. The catch block eats network errors with /* ignore */ and then calls
+  router.replace("/dashboard") unconditionally — so failure and success both
+  land on the dashboard.
+
+  Diagnosis — Task 2 (profile reflects onboarding)
+
+  The wiring is already correct: settings/preferences/page.tsx does select("*"),
+  reads every onboarding column, and passes them into <TravelStyleForm 
+  initialValues={...} /> which renders and writes back using the exact same DB
+  column names. Nothing is missing there.
+
+  The bugs are in the save functions: TravelStyleForm.handleSave() (line 132)
+  and ProfileSettingsForm.save() (line 33) both have the identical issue as Task
+  1 — never check response.ok, silently proceed on 500.
+
+  Diagnosis — Task 3 (Travel Documents)
+
+  Root cause: GET /api/profile selects all of READABLE_FIELDS in one query —
+  including both migration 010 columns (has_real_id, has_clear, etc.) and
+  migration 011 columns. If either migration is unapplied, the entire SELECT
+  fails with a Postgres "column does not exist" error → API returns 500 →
+  TravelDocsPage.fetchProfile hits if (!res.ok) return (line 121), leaves
+  profile = null, renders "Could not load profile." The page isn't blank — it
+  shows that error state, which is what you're seeing as "nothing."
+
+  Now that you've applied migration 011, Travel Docs will work if migration 010
+  was also previously applied. If it was never run, you'd need to run it too. I
+  can't query your DB to verify, so below I'll surface the actual API error
+  message in the UI so you can immediately see if something is still missing.
+
+  ---
+  Now the fixes:
+
+● Update(app\onboarding\page.tsx)
+  ⎿  Added 5 lines, removed 4 lines
+      365  
+      366  export default function OnboardingPage() {
+      367    const router  = useRouter();
+      368 -  const [step,    setStep]    = useState(0);                  
+      369 -  const [answers, setAnswers] = useState<Answers>(EMPTY);     
+      370 -  const [loading, setLoading] = useState(true);               
+      371 -  const [saving,  setSaving]  = useState(false);              
+      368 +  const [step,      setStep]      = useState(0);              
+      369 +  const [answers,   setAnswers]   = useState<Answers>(EMPTY); 
+      370 +  const [loading,   setLoading]   = useState(true);           
+      371 +  const [saving,    setSaving]    = useState(false);          
+      372 +  const [saveError, setSaveError] = useState<string | null>(nu
+          +ll);                                                          
+      373    const inputRef = useRef<HTMLInputElement>(null);
+      374  
+      375    // Pre-fill from existing profile and check onboarding statu
+           s
+
+● Update(app\onboarding\page.tsx)
+  ⎿  Added 34 lines, removed 4 lines
+      391  
+      392    async function save(finalAnswers: Answers) {
+      393      setSaving(true);
+      394 +    setSaveError(null);                                       
+      395      try {
+      396        const payload = buildPayload(finalAnswers);
+      396 -      await fetch("/api/profile", {                           
+      397 +      const res = await fetch("/api/profile", {               
+      398          method:  "PATCH",
+      399          headers: { "Content-Type": "application/json" },
+      400          body:    JSON.stringify(payload),
+      401        });
+      401 -    } catch { /* ignore — user still moves forward */ }       
+      402 +      if (!res.ok) {                                          
+      403 +        const json = await res.json().catch(() => ({})) as { e
+          +rror?: string };                                              
+      404 +        const msg = json.error ?? `Save failed (${res.status})
+          +`;                                                            
+      405 +        console.error("[onboarding] save failed:", msg);      
+      406 +        setSaveError(msg);                                    
+      407 +        setSaving(false);                                     
+      408 +        return;                                               
+      409 +      }                                                       
+      410 +    } catch (err) {                                           
+      411 +      const msg = err instanceof Error ? err.message : "Networ
+          +k error";                                                     
+      412 +      console.error("[onboarding] save error:", err);         
+      413 +      setSaveError(msg);                                      
+      414 +      setSaving(false);                                       
+      415 +      return;                                                 
+      416 +    }                                                         
+      417      setSaving(false);
+      418      router.replace("/dashboard");
+      419    }
+      420  
+      421    async function skipAll() {
+      422      setSaving(true);
+      423 +    setSaveError(null);                                       
+      424      try {
+      409 -      await fetch("/api/profile", {                           
+      425 +      const res = await fetch("/api/profile", {               
+      426          method:  "PATCH",
+      427          headers: { "Content-Type": "application/json" },
+      428          body:    JSON.stringify({ onboarding_completed: true }
+           ),
+      429        });
+      414 -    } catch { /* ignore */ }                                  
+      430 +      if (!res.ok) {                                          
+      431 +        const json = await res.json().catch(() => ({})) as { e
+          +rror?: string };                                              
+      432 +        const msg = json.error ?? `Save failed (${res.status})
+          +`;                                                            
+      433 +        console.error("[onboarding] skipAll failed:", msg);   
+      434 +        setSaveError(msg);                                    
+      435 +        setSaving(false);                                     
+      436 +        return;                                               
+      437 +      }                                                       
+      438 +    } catch (err) {                                           
+      439 +      const msg = err instanceof Error ? err.message : "Networ
+          +k error";                                                     
+      440 +      console.error("[onboarding] skipAll error:", err);      
+      441 +      setSaveError(msg);                                      
+      442 +      setSaving(false);                                       
+      443 +      return;                                                 
+      444 +    }                                                         
+      445      setSaving(false);
+      446      router.replace("/dashboard");
+      447    }
+
+● Now add the error display to the bottom action bar in the UI:
+
+● Update(app\onboarding\page.tsx)
+  ⎿  Added 10 lines
+      598            )}
+      599          </div>
+      600  
+      601 +        {/* ── Save error ────────────────────────────────────
+          +──────── */}                                                  
+      602 +        {saveError && (                                       
+      603 +          <div                                                
+      604 +            className="rounded-xl px-4 py-3 text-sm"          
+      605 +            style={{ backgroundColor: "#FEF2F2", border: "1px 
+          +solid #FECACA", color: "#DC2626" }}                           
+      606 +          >                                                   
+      607 +            <span className="font-semibold">Could not save: </
+          +span>{saveError}                                              
+      608 +          </div>                                              
+      609 +        )}                                                    
+      610 +                                                              
+      611          {/* ── Bottom actions ────────────────────────────────
+           ──────── */}
+      612          <div className="py-6 flex items-center gap-3">
+      613            <button
+● Now fix TravelStyleForm.handleSave():
+
+● Update(app\preferences\TravelStyleForm.tsx)
+  ⎿  Added 5 lines, removed 4 lines
+      113  // ─── Main form ─────────────────────────────────────────────
+           ───────────────────
+      114  
+      115  export function TravelStyleForm({ initialValues }: Props) {
+      116 -  const [values,  setValues]  = useState<TravelStyleValues>(in
+          -itialValues);                                                 
+      117 -  const [dirty,   setDirty]   = useState(false);              
+      118 -  const [saving,  setSaving]  = useState(false);              
+      119 -  const [saved,   setSaved]   = useState(false);              
+      116 +  const [values,   setValues]  = useState<TravelStyleValues>(i
+          +nitialValues);                                                
+      117 +  const [dirty,    setDirty]   = useState(false);             
+      118 +  const [saving,   setSaving]  = useState(false);             
+      119 +  const [saved,    setSaved]   = useState(false);             
+      120 +  const [saveErr,  setSaveErr] = useState<string | null>(null)
+          +;                                                             
+      121  
+      122    useEffect(() => { setValues(initialValues); }, [JSON.stringi
+           fy(initialValues)]);
+      123  
+
+● Update(app\preferences\TravelStyleForm.tsx)
+  ⎿  Added 9 lines, removed 1 line
+      129  
+      130    const handleSave = useCallback(async () => {
+      131      setSaving(true);
+      132 +    setSaveErr(null);                                         
+      133      try {
+      133 -      await fetch("/api/profile", {                           
+      134 +      const res = await fetch("/api/profile", {               
+      135          method:  "PATCH",
+      136          headers: { "Content-Type": "application/json" },
+      137          body:    JSON.stringify({
+     ...
+      143            home_airport:           values.home_airport.trim().t
+           oUpperCase() || null,
+      144          }),
+      145        });
+      146 +      if (!res.ok) {                                          
+      147 +        const json = await res.json().catch(() => ({})) as { e
+          +rror?: string };                                              
+      148 +        setSaveErr(json.error ?? `Save failed (${res.status})`
+          +);                                                            
+      149 +        return;                                               
+      150 +      }                                                       
+      151        setDirty(false);
+      152        setSaved(true);
+      153        setTimeout(() => setSaved(false), 2500);
+      154 +    } catch (err) {                                           
+      155 +      setSaveErr(err instanceof Error ? err.message : "Network
+          + error");                                                     
+      156      } finally {
+      157        setSaving(false);
+      158      }
+
+● Add the error display in TravelStyleForm's save footer:
+
+● Update(app\preferences\TravelStyleForm.tsx)
+  ⎿  Added 20 lines, removed 15 lines
+      264  
+      265        {/* Save footer */}
+      266        <div
+      267 -        className="px-5 py-4 flex items-center justify-end gap
+          --3"                                                           
+      267 +        className="px-5 py-4 space-y-2"                       
+      268          style={{ borderTop: `1px solid ${C.divider}` }}
+      269        >
+      270 -        {saved && (                                           
+      271 -          <span className="text-xs font-semibold flex items-ce
+          -nter gap-1" style={{ color: "#10B981" }}>                     
+      272 -            <CheckCircle2 className="h-3.5 w-3.5" />          
+      273 -            Saved                                             
+      274 -          </span>                                             
+      270 +        {saveErr && (                                         
+      271 +          <p className="text-xs text-center" style={{ color: "
+          +#DC2626" }}>{saveErr}</p>                                     
+      272          )}
+      276 -        <button                                               
+      277 -          onClick={handleSave}                                
+      278 -          disabled={!dirty || saving}                         
+      279 -          className="flex items-center gap-2 px-4 py-2 rounded
+          --xl text-sm font-semibold transition-all disabled:opacity-40" 
+      280 -          style={{ backgroundColor: C.accent, color: "#FFFFFF"
+          - }}                                                           
+      281 -        >                                                     
+      282 -          {saving ? <Loader2 className="h-4 w-4 animate-spin" 
+          -/> : <Save className="h-4 w-4" />}                            
+      283 -          Save                                                
+      284 -        </button>                                             
+      273 +        <div className="flex items-center justify-end gap-3"> 
+      274 +          {saved && (                                         
+      275 +            <span className="text-xs font-semibold flex items-
+          +center gap-1" style={{ color: "#10B981" }}>                   
+      276 +              <CheckCircle2 className="h-3.5 w-3.5" />        
+      277 +              Saved                                           
+      278 +            </span>                                           
+      279 +          )}                                                  
+      280 +          <button                                             
+      281 +            onClick={handleSave}                              
+      282 +            disabled={!dirty || saving}                       
+      283 +            className="flex items-center gap-2 px-4 py-2 round
+          +ed-xl text-sm font-semibold transition-all disabled:opacity-40
+          +"                                                             
+      284 +            style={{ backgroundColor: C.accent, color: "#FFFFF
+          +F" }}                                                         
+      285 +          >                                                   
+      286 +            {saving ? <Loader2 className="h-4 w-4 animate-spin
+          +" /> : <Save className="h-4 w-4" />}                          
+      287 +            Save                                              
+      288 +          </button>                                           
+      289 +        </div>                                                
+      290        </div>
+      291      </div>
+      292    );
+
+● Now fix ProfileSettingsForm.save():
+
+● Update(app\preferences\ProfileSettingsForm.tsx)
+  ⎿  Added 12 lines, removed 3 lines
+      23  
+      24  export function ProfileSettingsForm({ userId, initialProfile }:
+           { userId: string; initialProfile: Profile }) {
+      25    const [profile, setProfile] = useState<Profile>(initialProfil
+          e);
+      26 -  const [saving, setSaving]   = useState(false);               
+      27 -  const [saved, setSaved]     = useState(false);               
+      26 +  const [saving,  setSaving]  = useState(false);               
+      27 +  const [saved,   setSaved]   = useState(false);               
+      28 +  const [saveErr, setSaveErr] = useState<string | null>(null); 
+      29  
+      30    async function save() {
+      31      setSaving(true);
+      32      setSaved(false);
+      33 +    setSaveErr(null);                                          
+      34      try {
+      33 -      await fetch("/api/profile", {                            
+      35 +      const res = await fetch("/api/profile", {                
+      36          method: "PATCH",
+      37          headers: { "Content-Type": "application/json" },
+      38          body: JSON.stringify(profile),
+      39        });
+      40 +      if (!res.ok) {                                           
+      41 +        const json = await res.json().catch(() => ({})) as { er
+         +ror?: string };                                                
+      42 +        setSaveErr(json.error ?? `Save failed (${res.status})`)
+         +;                                                              
+      43 +        return;                                                
+      44 +      }                                                        
+      45        setSaved(true);
+      46        setTimeout(() => setSaved(false), 2500);
+      47 +    } catch (err) {                                            
+      48 +      setSaveErr(err instanceof Error ? err.message : "Network 
+         +error");                                                       
+      49      } finally {
+      50        setSaving(false);
+      51      }
+
+● Add the error display after the save button in ProfileSettingsForm:
+
+● Update(app\preferences\ProfileSettingsForm.tsx)
+  ⎿  Added 4 lines
+      177          {saved   && <CheckCircle2 className="h-4 w-4" />}
+      178          {saving ? "Saving…" : saved ? "Saved!" : "Save Setting
+           s"}
+      179        </button>
+      180 +                                                              
+      181 +      {saveErr && (                                           
+      182 +        <p className="text-xs text-center" style={{ color: "#D
+          +C2626" }}>{saveErr}</p>                                       
+      183 +      )}                                                      
+      184      </div>
+      185    );
+      186  }
+
+● Now fix Travel Docs fetchProfile to expose the actual error message instead of
+  silently failing:
+
+● Update(app\settings\travel-docs\page.tsx)
+  ⎿  Added 17 lines, removed 6 lines
+      108  export default function TravelDocsPage() {
+      109    const router = useRouter();
+      110  
+      111 -  const [profile, setProfile] = useState<Profile | null>(null)
+          -;                                                             
+      112 -  const [loading, setLoading] = useState(true);               
+      113 -  const [saving,  setSaving]  = useState(false);              
+      114 -  const [saved,   setSaved]   = useState(false);              
+      115 -  const [saveErr, setSaveErr] = useState<string | null>(null);
+      111 +  const [profile,   setProfile]   = useState<Profile | null>(n
+          +ull);                                                         
+      112 +  const [loading,   setLoading]   = useState(true);           
+      113 +  const [fetchErr,  setFetchErr]  = useState<string | null>(nu
+          +ll);                                                          
+      114 +  const [saving,    setSaving]    = useState(false);          
+      115 +  const [saved,     setSaved]     = useState(false);          
+      116 +  const [saveErr,   setSaveErr]   = useState<string | null>(nu
+          +ll);                                                          
+      117  
+      118    const fetchProfile = useCallback(async () => {
+      119      try {
+      120        const res = await fetch("/api/profile");
+      121        if (res.status === 401) { router.replace("/login"); retu
+           rn; }
+      121 -      if (!res.ok) return;                                    
+      122 +      if (!res.ok) {                                          
+      123 +        const json = await res.json().catch(() => ({})) as { e
+          +rror?: string };                                              
+      124 +        const msg = json.error ?? `Could not load profile (${r
+          +es.status})`;                                                 
+      125 +        console.error("[travel-docs] fetchProfile failed:", ms
+          +g);                                                           
+      126 +        setFetchErr(msg);                                     
+      127 +        return;                                               
+      128 +      }                                                       
+      129        const json = await res.json() as { profile: Profile };
+      130        setProfile(json.profile);
+      131 +    } catch (err) {                                           
+      132 +      const msg = err instanceof Error ? err.message : "Networ
+          +k error";                                                     
+      133 +      console.error("[travel-docs] fetchProfile error:", err);
+      134 +      setFetchErr(msg);                                       
+      135      } finally {
+      136        setLoading(false);
+      137      }
+
+● Update the error display in the render to show the actual message:
+
+● Update(app\settings\travel-docs\page.tsx)
+  ⎿  Added 4 lines
+      208            <div className="flex justify-center py-16">
+      209              <Loader2 className="h-6 w-6 animate-spin" style={{
+            color: C.muted }} />
+      210            </div>
+      211 +        ) : fetchErr ? (                                      
+      212 +          <p className="text-sm text-center py-12" style={{ co
+          +lor: "#DC2626" }}>                                            
+      213 +            {fetchErr}                                        
+      214 +          </p>                                                
+      215          ) : !profile ? (
+      216            <p className="text-sm text-center py-12" style={{ co
+           lor: C.muted }}>
+      217              Could not load profile. Try reloading.
+
+● Now let me verify all four files look correct in the areas I changed:
+
+  Read 2 files (ctrl+o to expand)
+
+● Good. Let me also verify the render section of travel-docs:
+
+  Read 1 file (ctrl+o to expand)
+
+● All changes are correct. Here's a summary of what was done and one thing you
+  may still need to run:
+
+  ---
+  What changed
+
+  Task 1 — onboarding/page.tsx
+  - save() and skipAll() now check response.ok, parse the error JSON, set
+  saveError state, and return early — no redirect on failure.
+  - Network errors are caught and surfaced the same way.
+  - A red error banner renders above the action buttons when a save fails.
+
+  Task 2 — TravelStyleForm.tsx + ProfileSettingsForm.tsx
+  - Both handleSave/save functions now check response.ok, capture the error
+  message, and display it below the save button. Profile and preferences saves
+  were silently failing for the same reason as onboarding.
+
+  Task 3 — settings/travel-docs/page.tsx
+  - fetchProfile now reads and exposes the actual error message from the API
+  instead of silently returning with profile = null.
+  - The render shows the real error text in red, so if something is still wrong
+  you'll see exactly why (e.g. "column does not exist").
+
+  ---
+  One thing you may still need to run
+
+  If Travel Documents still shows an error after your changes, migration 010 may
+  not have been applied. Run this in your Supabase SQL Editor:
+
+  ALTER TABLE public.users
+    ADD COLUMN IF NOT EXISTS has_real_id           boolean NOT NULL DEFAULT
+  false,
+    ADD COLUMN IF NOT EXISTS has_clear             boolean NOT NULL DEFAULT
+  false,
+    ADD COLUMN IF NOT EXISTS known_traveler_number text,
+    ADD COLUMN IF NOT EXISTS lounge_memberships    text[];
+
+  With the new error surfacing, the page will now show the exact Postgres error
+  if this is still missing — you won't have to guess.
+
+✻ Crunched for 4m 19s
+
+※ recap: Fixed onboarding save errors and profile page silent failures. Run the app and complete onboarding to verify answers persist, then check Travel Documents loads correctly. (disable recaps in /config)
+
+❯ The Travel Documents migration SQL in your last output came through garbled   
+  on my end.                                                                    
+                                                                                
+  Do NOT change any code. Just do this:                                         
+  1. Show me the complete, clean ALTER TABLE statement for the Travel Documents 
+  columns, exactly as it should be pasted into the Supabase SQL Editor.         
+  2. Tell me which migration file in supabase/migrations/ it corresponds to,    
+  and whether that file is committed or untracked in git.                       
+  3. List every column the Travel Documents page reads, so I can confirm the    
+  SQL covers all of them.                                                       
+
+● 1. The SQL to paste into the Supabase SQL Editor:
+
+  ALTER TABLE public.users
+    ADD COLUMN IF NOT EXISTS has_real_id           boolean NOT NULL DEFAULT
+  false,
+    ADD COLUMN IF NOT EXISTS has_clear             boolean NOT NULL DEFAULT
+  false,
+    ADD COLUMN IF NOT EXISTS known_traveler_number text,
+    ADD COLUMN IF NOT EXISTS lounge_memberships    text[];
+
+  2. Corresponding migration file:
+
+  supabase/migrations/010_traveler_profile.sql — this file is committed to git
+  (it appears in the normal tracked file list, not in the ?? untracked entries).
+  The only untracked migration is 011_onboarding_fields.sql, which you've
+  already applied.
+
+  3. Every column the Travel Documents page reads (Profile interface + what it 
+  renders):
+
+  ┌───────────────────────┬────────────────────┬────────────────────────────┐
+  │        Column         │  Source migration  │            Type            │
+  ├───────────────────────┼────────────────────┼────────────────────────────┤
+  │ tsa_precheck          │ 001 (initial       │ boolean                    │
+  │                       │ schema)            │                            │
+  ├───────────────────────┼────────────────────┼────────────────────────────┤
+  │ global_entry          │ 001 (initial       │ boolean                    │
+  │                       │ schema)            │                            │
+  ├───────────────────────┼────────────────────┼────────────────────────────┤
+  │ has_real_id           │ 010                │ boolean NOT NULL DEFAULT   │
+  │                       │                    │ false                      │
+  ├───────────────────────┼────────────────────┼────────────────────────────┤
+  │ has_clear             │ 010                │ boolean NOT NULL DEFAULT   │
+  │                       │                    │ false                      │
+  ├───────────────────────┼────────────────────┼────────────────────────────┤
+  │ known_traveler_number │ 010                │ text (nullable)            │
+  ├───────────────────────┼────────────────────┼────────────────────────────┤
+  │ lounge_memberships    │ 010                │ text[] (nullable)          │
+  └───────────────────────┴────────────────────┴────────────────────────────┘
+
+  The SQL above covers all four migration-010 columns. tsa_precheck and
+  global_entry have been in the schema since the initial migration and don't
+  need to be added.
+
+✻ Crunched for 13s
+
+  ⎿  Tip: You're asking Claude to show you a clean SQL statement — instead of 
+     pasting it back, you can share the Supabase docs URL and Claude will fetch 
+     it directly to give you the exact syntax. → Paste the URL instead of the 
+     page contents
+
+❯ Do NOT change code. Audit only.                                               
+                                                                                
+  List every file in supabase/migrations/. For each one, tell me whether its    
+  schema changes are actually present in the live database (check against the   
+  columns the app reads). I want to know if any OTHER committed migration has   
+  never been applied — same gap we just found with 010.                         
+                                                                                
+  Output a simple table: migration file | applied to live DB? | columns it      
+  should have added.                                                            
+
+● I already have 001, 004, 010, 011. Let me read the rest now.
+
+  Read 7 files (ctrl+o to expand)
+
+● I can't query your Supabase instance directly, so I'm reasoning from two
+  signals: (a) which tables/columns the app code actively reads, and (b) whether
+  those features were reported as working. Here's the honest audit:
+
+  Migration file: 001_initial_schema.sql
+  Applied to live DB?: Very likely yes — app sign-up and trips work
+  What it should have added: Tables: users, trips, itinerary_steps, alerts,
+    user_preferences, trip_events, family_links; RLS policies on all
+  ────────────────────────────────────────
+  Migration file: 002_auth_user_trigger.sql
+  Applied to live DB?: Very likely yes — new users get a public.users row on
+    sign-up, which works
+  What it should have added: Trigger function handle_new_user() +
+    on_auth_user_created trigger on auth.users
+  ────────────────────────────────────────
+  Migration file: 003_parental_mode.sql
+  Applied to live DB?: Uncertain — columns are committed but family/parental
+    features haven't been confirmed working
+  What it should have added: trips.parental_mode (boolean), trips.parent_id
+    (uuid), trips.parental_settings (jsonb); two RLS policies
+  ────────────────────────────────────────
+  Migration file: 004_add_arrival_time.sql
+  Applied to live DB?: Very likely yes — arrival times display in the app
+  What it should have added: trips.arrival_time (timestamptz)
+  ────────────────────────────────────────
+  Migration file: 005_notifications.sql
+  Applied to live DB?: Uncertain — table is used by Inngest jobs; unknown if
+    those jobs have actually run successfully
+  What it should have added: New table notifications (id, user_id, trip_id,
+  type,
+    title, body, read, created_at); RLS policies
+  ────────────────────────────────────────
+  Migration file: 006_family_sharing.sql
+  Applied to live DB?: Uncertain — share feature exists in code but unknown if
+    it's been tested
+  What it should have added: trips.share_token (text), trips.share_enabled
+    (boolean); new table trip_milestones (id, trip_id, type, reached_at); RLS
+    policies
+  ────────────────────────────────────────
+  Migration file: 007_add_departure_timezone.sql
+  Applied to live DB?: Very likely yes — commit cfbfbee explicitly fixed
+  timezone
+    display and is in the git log
+  What it should have added: trips.departure_timezone (text)
+  ────────────────────────────────────────
+  Migration file: 008_add_destination_timezone.sql
+  Applied to live DB?: Very likely yes — same commit as above
+  What it should have added: trips.destination_timezone (text)
+  ────────────────────────────────────────
+  Migration file: 009_add_scheduled_estimated_actual.sql
+  Applied to live DB?: Very likely yes — same commit; app renders scheduled vs.
+    estimated/actual times
+  What it should have added: trips.departure_scheduled/estimated/actual,
+    trips.arrival_scheduled/estimated/actual (all timestamptz)
+  ────────────────────────────────────────
+  Migration file: 010_traveler_profile.sql
+  Applied to live DB?: Uncertain — high risk — Travel Docs was broken; this is
+    the migration you need to run if you haven't
+  What it should have added: users.has_real_id (boolean), users.has_clear
+    (boolean), users.known_traveler_number (text), users.lounge_memberships
+    (text[])
+  ────────────────────────────────────────
+  Migration file: 011_onboarding_fields.sql
+  Applied to live DB?: Confirmed applied — you ran it this session
+  What it should have added: users.arrival_buffer_minutes, travel_frequency,
+    trip_scope, travels_with, travel_stressors, family_auto_updates,
+    home_airport, onboarding_completed
+
+  The three to verify before trusting those features:
+
+  - 010 — highest priority; Travel Docs is broken without it. SQL is the clean
+  ALTER TABLE I gave you above.
+  - 005 — if push notifications have never fired, the notifications table may be
+  missing.
+  - 006 — if family sharing / the public trip share page has never been tested,
+  trip_milestones and the share_token column may be missing.
+
+  The "Very likely yes" ones (001–004, 007–009) power features you've actively
+  used, so missing any of them would have caused obvious crashes already. The
+  three flagged above power features that are either untested or were confirmed
+  broken.
+
+✻ Baked for 1m 3s
+※ recap: Fixing GateReady onboarding persistence and profile/settings pages. You just applied migration 011 and we patched silent error swallowing across four files. Next: run migration 010 in the Supabase SQL Editor to unblock Travel Documents. (disable recaps in /config)
+
+❯ Do NOT change application code or schema. Documentation only.                 
+                                                                                
+  I just verified against the live DB that migrations 001–011 are all applied.  
+  Create a single source of truth so I stop re-investigating migration state.   
+                                                                                
+  In the repo README (or a new docs/MIGRATIONS.md if cleaner), add a table:     
+  migration file | applied to live DB (Y/N) | date confirmed | what it added    
+  (one line)                                                                    
+                                                                                
+  Pre-fill all of 001–011 as applied, confirmed today. Pull the "what it added" 
+  summaries from the migration files themselves.                                
+                                                                                
+  Add a one-line rule at the top: "After writing any new migration, apply it in 
+  the Supabase SQL Editor and mark it here. A committed migration file does     
+  NOT mean it's live."                                                          
+                                                                                
+  Keep it terse. This is a checklist, not prose.                                
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● The README is boilerplate. docs/MIGRATIONS.md is the cleaner choice — no docs
+  directory exists yet, which is fine.
+
+● Write(docs\MIGRATIONS.md)
+  ⎿  Wrote 17 lines to docs\MIGRATIONS.md
+       1 # Migration Status
+       3 **Rule:** After writing any new migration, apply it in the Supab
+          NOT mean it's live.
+       4 
+          added |
+       7 | `001_initial_schema.sql` | Y | 2026-06-30 | Core tables: users
+          family_links; RLS on all |
+       8 | `002_auth_user_trigger.sql` | Y | 2026-06-30 | Trigger: auto-i
+       9 | `003_parental_mode.sql` | Y | 2026-06-30 | trips: parental_mod
+      10 | `004_add_arrival_time.sql` | Y | 2026-06-
+     … +23 lines (ctrl+o to expand)
+
+● Created docs/MIGRATIONS.md. To add future migrations, append a row with N in
+  the applied column, run the SQL, then flip it to Y with today's date.
+
+✻ Cogitated for 32s
+
+❯ CONTEXT                                                                       
+  Project: GateReady. Next.js 16.2.9, TypeScript, React 19, Tailwind, Supabase, 
+  Inngest, Anthropic SDK.                                                       
+  IMPORTANT: Next.js 16 has breaking changes. Read node_modules/next/dist/docs/ 
+  before writing route/server code — do not assume Next 14 conventions.         
+                                                                                
+  BASELINE (verified this session): migrations 001–011 are all live. Onboarding 
+  persists arrival_buffer_minutes, travel_frequency, trip_scope, travels_with,  
+  travel_stressors, home_airport to the users row.                              
+                                                                                
+  GOAL                                                                          
+  Build the rules-based Leave Now buffer engine AND start logging               
+  predicted-vs-actual outcomes. This is the labeled-data foundation for a       
+  future ML model — so the logging matters as much as the prediction. Decision  
+  is already made: rules now, ML later. Do not propose ML.                      
+                                                                                
+  INVESTIGATE FIRST (report before coding)                                      
+  - Find where Leave Now currently computes departure time (memory says a       
+  computeLeaveTime pure function exists). Report its current inputs and where   
+  the arrival buffer comes from today (hardcoded? a single column?).            
+  - Confirm whether trip_predictions already exists in the DB or migrations.    
+  (It should NOT yet.)                                                          
+                                                                                
+  TASK 1 — New migration: trip_predictions                                      
+  - Write supabase/migrations/012_trip_predictions.sql:                         
+    trip_predictions(                                                           
+      id uuid pk default gen_random_uuid(),                                     
+      trip_id uuid references trips(id) on delete cascade,                      
+      user_id uuid references users(id) on delete cascade,                      
+      predicted_buffer_minutes integer not null,                                
+      actual_buffer_minutes integer,            -- nullable; filled in after    
+  the trip                                                                      
+      rule_factors jsonb,                        -- which rules fired +         
+  weights, for later analysis                                                   
+      created_at timestamptz default now()                                      
+    )                                                                           
+  - Add RLS: users can read/write only their own rows (match the existing       
+  users-own-row pattern).                                                       
+  - Output the SQL for me to paste into Supabase. Do NOT assume it's applied.   
+  Add the row to docs/MIGRATIONS.md as applied=N (I'll flip it after I run it). 
+                                                                                
+  TASK 2 — lib/bufferEngine.ts (pure, testable)                                 
+  - Export computeBuffer(input) returning { bufferMinutes, factors } where      
+  factors is the jsonb-able breakdown.                                          
+  - Start from the user's arrival_buffer_minutes as the base, then apply        
+  weighted rule adjustments from signals available today: time_of_day           
+  (early-morning/red-eye vs midday), airport_tier (large hub vs small — a       
+  simple lookup is fine; flag if you need a data source), trip_scope (domestic  
+  vs international), travel_stressors (e.g. adds buffer if "long security       
+  lines" selected).                                                             
+  - Each rule contributes a labeled, signed adjustment recorded in factors.     
+  Pure function — no I/O, no DB calls. This is the file I want unit-testable.   
+                                                                                
+  TASK 3 — Wire prediction logging                                              
+  - When a trip's Leave Now is computed, insert a trip_predictions row with     
+  predicted_buffer_minutes + rule_factors. Do not block the user-facing calc on 
+  the insert (log failures, don't throw into the UI).                           
+  - Leave actual_buffer_minutes null for now; add a clearly-marked TODO stub    
+  for where it'll be backfilled later (e.g. when a trip completes). Do not      
+  build the backfill yet.                                                       
+                                                                                
+  SUCCESS                                                                       
+  - 012 migration SQL produced + MIGRATIONS.md updated (applied=N).             
+  - computeBuffer is pure, returns buffer + factor breakdown, reads the user's  
+  base buffer.                                                                  
+  - Computing Leave Now logs one trip_predictions row; a failed insert never    
+  breaks the countdown.                                                         
+                                                                                
+  CONSTRAINTS                                                                   
+  Show diagnosis before code. Don't refactor the existing computeLeaveTime      
+  beyond what's needed to feed it the new buffer. Keep bufferEngine.ts I/O-free 
+  so it's testable. One concern only — no ML, no backfill, no UI redesign.      
+
+● Investigating first.
+
+  Searched for 3 patterns, read 2 files (ctrl+o to expand)
+
+● Good. Let me also see what's in lib and check for the airport/hub lookup data:
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+● Now let me check the supabase server client and the inngest poll to understand
+  the service client pattern:
+
+  Read 1 file (ctrl+o to expand)
+
+● I have everything I need. Here's the diagnosis:
+
+  ---
+  Diagnosis
+
+  computeLeaveTime location and inputs: Lives in lib/leaveNow.ts. It's a pure
+  function — takes {departureTime, driveMinutes, tsaMinutes, walkToGateMinutes, 
+  userBufferMinutes} and no DB access. The userBufferMinutes param already
+  defaults to 20 if not provided.
+
+  Where arrival_buffer_minutes comes from today: app/api/leave-now/route.ts
+  lines 21-25 — it does a live DB query for arrival_buffer_minutes and passes
+  the result straight to computeLeaveTime as userBufferMinutes. No hardcoding;
+  the column is already wired. The route does not fetch trip_scope or
+  travel_stressors yet.
+
+  trip_predictions table: Confirmed does not exist — no migration file, no
+  mention anywhere in the codebase.
+
+  Airport tier data: lib/airportFeatures.ts and lib/api/airport-map.ts both
+  exist with curated static lists covering the major US hubs. I can derive the
+  hub set from these without any external data source.
+
+  ---
+  Now the code:
+
+● Write(supabase\migrations\012_trip_predictions.sql)
+  ⎿  Wrote 16 lines to supabase\migrations\012_trip_predictions.sql
+      1 CREATE TABLE IF NOT EXISTS public.trip_predictions (
+        ndom_uuid(),
+      3   trip_id                  uuid        NOT NULL REFERENCES public
+        .trips(id)  ON DELETE CASCADE,
+        .users(id)  ON DELETE CASCADE,
+      5   predicted_buffer_minutes integer     NOT NULL,
+        post-trip; null until backfill
+      7   rule_factors             jsonb,                   -- per-rule a
+        djustments from bufferEngine
+      9 );
+     … +11 lines (ctrl+o to expand)
+
+● Write(lib\bufferEngine.ts)
+  ⎿  Wrote 120 lines to lib\bufferEngine.ts
+       1 // Pure, I/O-free buffer engine.
+          this is the
+       3 // labeled breakdown that will train the ML model once actual ou
+       4 
+       5 export interface BufferInput {
+         utes from their profile
+       7   departureHour: number;            // 0–23 in departure airport
+       8   airportIata: string | null;       // trip origin (e.g. "LAX")
+       9   tripScope: string | null;         // "domestic" | "internation
+      10   travelStressors: string[] | null; // from user profile
+     … +133 lines (ctrl+o to expand)
+
+● Now update the route — extend the user SELECT, call computeBuffer, wire the
+  prediction insert:
+
+● Write(app\api\leave-now\route.ts)
+  ⎿  Added 58 lines, removed 11 lines
+       3  import { getDriveTime, distanceToAirportKm } from "@/lib/api/ma
+          ps";
+       4  import { getTsaWait }    from "@/lib/api/tsa";
+       5  import { computeLeaveTime } from "@/lib/leaveNow";
+       6 +import { computeBuffer }    from "@/lib/bufferEngine";         
+       7  
+       8  // Straight-line km above which driving to the airport is impla
+          usible.
+       9  // E.g. Phoenix user with a JFK flight → ~3400 km → skip live d
+          rive routing.
+      10  const FAR_THRESHOLD_KM = 500;
+      11  
+      12 +// Convert a UTC Date to the local hour (0–23) at the given IAN
+         +A timezone.                                                    
+      13 +// Falls back to UTC if the timezone string is missing or unrec
+         +ognised.                                                       
+      14 +function localDepartureHour(date: Date, timezone: string | null
+         +): number {                                                    
+      15 +  if (!timezone) return date.getUTCHours();                    
+      16 +  try {                                                        
+      17 +    const hourStr = new Intl.DateTimeFormat("en-US", {         
+      18 +      hour: "2-digit",                                         
+      19 +      hour12: false,                                           
+      20 +      timeZone: timezone,                                      
+      21 +    }).format(date);                                           
+      22 +    const hour = parseInt(hourStr, 10);                        
+      23 +    return isNaN(hour) ? date.getUTCHours() : hour % 24; // % 2
+         +4 guards against "24" at midnight                              
+      24 +  } catch {                                                    
+      25 +    return date.getUTCHours();                                 
+      26 +  }                                                            
+      27 +}                                                              
+      28 +                                                               
+      29  export async function POST(request: NextRequest) {
+      30    // ── Auth ──────────────────────────────────────────────────
+          ──────
+      31    const client = await createSessionClient();
+     ...
+      34      return Response.json({ error: "Unauthorized" }, { status: 4
+          01 });
+      35    }
+      36  
+      19 -  // ── User buffer preference ────────────────────────────────
+         -─────                                                          
+      37 +  // ── User profile (base buffer + engine signals) ───────────
+         +─────                                                          
+      38    const { data: userRow } = await client
+      39      .from("users")
+      22 -    .select("arrival_buffer_minutes")                          
+      40 +    .select("arrival_buffer_minutes, trip_scope, travel_stresso
+         +rs")                                                           
+      41      .eq("id", user.id)
+      42      .single();
+      25 -  const userBufferMinutes = userRow?.arrival_buffer_minutes ?? 
+         -20;                                                            
+      43 +  const baseBufferMinutes = userRow?.arrival_buffer_minutes ?? 
+         +20;                                                            
+      44  
+      45    // ── Parse body (lat/lng optional; tripId optional) ────────
+          ───────
+      46    let lat: number | undefined;
+     ...
+      76    const departureTime = new Date(trip.departure_time);
+      77    const hasCoords     = typeof lat === "number" && typeof lng =
+          == "number";
+      78  
+      79 +  // ── Rules-based buffer ────────────────────────────────────
+         +──────                                                         
+      80 +  const bufferResult = computeBuffer({                         
+      81 +    baseBufferMinutes,                                         
+      82 +    departureHour:   localDepartureHour(departureTime, trip.dep
+         +arture_timezone ?? null),                                      
+      83 +    airportIata,                                               
+      84 +    tripScope:       userRow?.trip_scope       ?? null,        
+      85 +    travelStressors: userRow?.travel_stressors ?? null,        
+      86 +  });                                                          
+      87 +                                                               
+      88    // ── Straight-line distance check ──────────────────────────
+          ──────
+      89    // Prevents routing a user to an airport hundreds of kilometr
+          es away,
+      90    // which would return a correct but useless multi-day drive t
+          ime.
+     ...
+       97      distanceKm !== null && distanceKm > FAR_THRESHOLD_KM;
+       98  
+       99    // Route via Maps only when: coords known + airport known + 
+           not far away.
+       73 -  // A null distanceKm (airport not in our table) still allows
+          - routing;                                                     
+       74 -  // getDriveTime's 300-min cap acts as the second-layer guard
+          -.                                                             
+      100    const canRoute =
+      101      hasCoords && !!airportIata && !isFarFromAirport;
+      102  
+     ...
+      109    ]);
+      110  
+      111    // When far from the airport, exclude drive time from the ca
+           lculation.
+       87 -  // The card will surface a clear "far away" note in the brea
+          -kdown.                                                        
+      112    const effectiveDriveMinutes = isFarFromAirport ? 0 : driveRe
+           sult.durationMinutes;
+      113  
+      114    // ── Compute leave time ───────────────────────────────────
+           ───────
+      115    const result = computeLeaveTime({
+      116      departureTime,
+       93 -    driveMinutes:     effectiveDriveMinutes,                  
+       94 -    tsaMinutes:       tsaResult.waitMinutes,                  
+       95 -    userBufferMinutes,                                        
+      117 +    driveMinutes:      effectiveDriveMinutes,                 
+      118 +    tsaMinutes:        tsaResult.waitMinutes,                 
+      119 +    userBufferMinutes: bufferResult.bufferMinutes,            
+      120    });
+      121  
+      122 +  // ── Log prediction (fire-and-forget — never blocks the res
+          +ponse) ─                                                      
+      123 +  // TODO: backfill actual_buffer_minutes here once trip-compl
+          +etion detection exists.                                       
+      124 +  //       When a trip status flips to "landed" or similar, re
+          +ad the user's actual                                          
+      125 +  //       departure time from the milestone log and compute t
+          +he real buffer used.                                          
+      126 +  client                                                      
+      127 +    .from("trip_predictions")                                 
+      128 +    .insert({                                                 
+      129 +      trip_id:                  trip.id,                      
+      130 +      user_id:                  user.id,                      
+      131 +      predicted_buffer_minutes: bufferResult.bufferMinutes,   
+      132 +      rule_factors:             bufferResult.factors,         
+      133 +      actual_buffer_minutes:    null,                         
+      134 +    })                                                        
+      135 +    .then(({ error }) => {                                    
+      136 +      if (error) console.error("[leave-now] prediction insert 
+          +failed:", error.message);                                     
+      137 +    })                                                        
+      138 +    .catch((err: unknown) => {                                
+      139 +      console.error("[leave-now] prediction insert threw:", er
+          +r);                                                           
+      140 +    });                                                       
+      141 +                                                              
+      142    // ── Build drive note ─────────────────────────────────────
+           ───────
+      143    let driveNote: string | undefined;
+      144    if (isFarFromAirport && airportIata) {
+     ...
+      158        drive: {
+      159          minutes:     effectiveDriveMinutes,
+      160          isLive:      isFarFromAirport ? false : driveResult.is
+           Live,
+      117 -        unavailable: isFarFromAirport || undefined,   // omitt
+          -ed (not serialized) when false                                
+      161 +        unavailable: isFarFromAirport || undefined,           
+      162          distanceKm:  distanceKm !== null ? Math.round(distance
+           Km) : undefined,
+      163          note:        driveNote,
+      164        },
+     ...
+      168          note:    tsaResult.note,
+      169        },
+      170        walkToGate: { minutes: 15 },
+      127 -      buffer:     { minutes: userBufferMinutes },             
+      171 +      buffer: {                                               
+      172 +        minutes: bufferResult.bufferMinutes,                  
+      173 +        factors: bufferResult.factors,                        
+      174 +      },                                                      
+      175      },
+      176    });
+      177  }
+
+● Now update MIGRATIONS.md:
+
+● Update(docs\MIGRATIONS.md)
+  ⎿  Added 1 line
+      15  | `009_add_scheduled_estimated_actual.sql` | Y | 2026-06-30 | t
+          rips: departure/arrival ×{scheduled, estimated, actual} |
+      16  | `010_traveler_profile.sql` | Y | 2026-06-30 | users: has_real
+          _id, has_clear, known_traveler_number, lounge_memberships |
+      17  | `011_onboarding_fields.sql` | Y | 2026-06-30 | users: arrival
+          _buffer_minutes, travel_frequency, trip_scope, travels_with, tr
+          avel_stressors, family_auto_updates, home_airport, onboarding_c
+          ompleted |
+      18 +| `012_trip_predictions.sql` | N | — | New table: trip_predicti
+         +ons (predicted_buffer_minutes, actual_buffer_minutes, rule_fact
+         +ors jsonb); RLS own-rows |                                     
+
+● Here's what was built and the SQL you need to run:
+
+  ---
+  Migration SQL to paste into Supabase SQL Editor
+
+  CREATE TABLE IF NOT EXISTS public.trip_predictions (
+    id                       uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    trip_id                  uuid        NOT NULL REFERENCES public.trips(id)
+  ON DELETE CASCADE,
+    user_id                  uuid        NOT NULL REFERENCES public.users(id)
+  ON DELETE CASCADE,
+    predicted_buffer_minutes integer     NOT NULL,
+    actual_buffer_minutes    integer,
+    rule_factors             jsonb,
+    created_at               timestamptz NOT NULL DEFAULT now()
+  );
+
+  ALTER TABLE public.trip_predictions ENABLE ROW LEVEL SECURITY;
+
+  CREATE POLICY "trip_predictions: own rows only"
+    ON public.trip_predictions FOR ALL
+    USING  (auth.uid() = user_id)
+    WITH CHECK (auth.uid() = user_id);
+
+  After running it, flip 012 in docs/MIGRATIONS.md to Y.
+
+  ---
+  What was built
+
+  lib/bufferEngine.ts — pure function, no imports, easily unit-testable.
+  computeBuffer(input) starts from baseBufferMinutes (the user's saved
+  preference) and applies five signed adjustments:
+
+  ┌───────────────────────────┬──────────────────────────────────┬───────────┐
+  │           Rule            │             Trigger              │ Δ minutes │
+  ├───────────────────────────┼──────────────────────────────────┼───────────┤
+  │ time_of_day_early_morning │ Departure 4–6 am local           │ +5        │
+  ├───────────────────────────┼──────────────────────────────────┼───────────┤
+  │ time_of_day_late_night    │ Departure 10 pm – 3 am local     │ −5        │
+  ├───────────────────────────┼──────────────────────────────────┼───────────┤
+  │ airport_tier_large_hub    │ Origin in 25 known large US hubs │ +5        │
+  ├───────────────────────────┼──────────────────────────────────┼───────────┤
+  │ trip_scope_international  │ User's scope = "international"   │ +15       │
+  ├───────────────────────────┼──────────────────────────────────┼───────────┤
+  │ trip_scope_mixed          │ User's scope = "both"            │ +5        │
+  ├───────────────────────────┼──────────────────────────────────┼───────────┤
+  │ stressor_security_lines   │ In user's travel_stressors       │ +5        │
+  ├───────────────────────────┼──────────────────────────────────┼───────────┤
+  │ stressor_when_to_leave    │ In user's travel_stressors       │ +5        │
+  ├───────────────────────────┼──────────────────────────────────┼───────────┤
+  │ stressor_traffic          │ In user's travel_stressors       │ +5        │
+  └───────────────────────────┴──────────────────────────────────┴───────────┘
+
+  Final value clamped to [10, 90] minutes.
+
+  app/api/leave-now/route.ts — three changes only:
+  1. Extended user select to include trip_scope, travel_stressors
+  2. Calls computeBuffer before computeLeaveTime; passes
+  bufferResult.bufferMinutes as userBufferMinutes
+  3. Fire-and-forget trip_predictions insert with a TODO comment marking where
+  actual_buffer_minutes backfill belongs
+
+  The insert uses .then().catch() — a failure logs to console and the response
+  is already sent.
+
+✻ Brewed for 4m 1s
+
+※ recap: Building the Leave Now buffer engine and prediction logging. Migration 012 is written but not yet applied — paste its SQL into the Supabase SQL Editor and flip it to Y in docs/MIGRATIONS.md. (disable recaps in /config)
+
+❯ CONTEXT                                                                       
+  Project: GateReady. Next.js 16.2.9, TypeScript, React 19, Tailwind, Supabase, 
+  Inngest.                                                                      
+  IMPORTANT: Next.js 16 has breaking changes. Read node_modules/next/dist/docs/ 
+  before writing route/server code.                                             
+                                                                                
+  BASELINE (verified): migration 012 trip_predictions is live. Leave Now        
+  currently inserts a NEW prediction row on EVERY computation, so one trip      
+  accumulates many rows. computeBuffer (lib/bufferEngine.ts) is pure and        
+  returns { bufferMinutes, factors }.                                           
+                                                                                
+  DECISION (already made — implement, don't re-litigate): ONE prediction row    
+  per trip, updated in place. The latest computation overwrites the prior       
+  prediction for that trip. We are NOT keeping per-computation history.         
+                                                                                
+  INVESTIGATE FIRST (report before coding)                                      
+  - Show the current insert in app/api/leave-now/route.ts.                      
+  - Confirm there is no unique constraint on trip_predictions.trip_id yet.      
+  - Identify where a trip is marked complete / where actual departure data      
+  lands (memory: trips has departure_actual + a status). Report what signal     
+  tells us a trip is done and what the user's real departure time was, so we    
+  can compute actual_buffer_minutes. If that signal doesn't cleanly exist yet,  
+  say so — do not invent one.                                                   
+                                                                                
+  TASK 1 — Enforce one row per trip                                             
+  - Write supabase/migrations/013_trip_predictions_unique.sql:                  
+    - First de-dupe existing rows: keep the most recent row per trip_id, delete 
+  the rest.                                                                     
+    - Then add a UNIQUE constraint on trip_predictions(trip_id).                
+  - Output the SQL for me to run. Add 013 to docs/MIGRATIONS.md as applied=N.   
+                                                                                
+  TASK 2 — Convert insert to upsert                                             
+  - Change the Leave Now logging from insert to upsert on the trip_id unique    
+  key (update predicted_buffer_minutes, rule_factors, and a new                 
+  updated_at-style touch; leave actual_buffer_minutes untouched on conflict).   
+  - Keep it fire-and-forget and non-blocking, BUT upgrade the failure handling: 
+  a failed write must log with enough detail to diagnose (trip_id + the         
+  error), not just a bare console line. This table is our training data —       
+  silent loss is the thing we're avoiding.                                      
+                                                                                
+  TASK 3 — Backfill actual_buffer_minutes (only if the signal exists)           
+  - IF investigation found a reliable "trip complete + actual departure time"   
+  signal:                                                                       
+    - Compute actual_buffer_minutes = (actual gate-arrival or departure         
+  reference) minus (when the user actually left), matching the SAME definition  
+  predicted_buffer_minutes represents. State the exact definition you're using  
+  in a comment — predicted and actual MUST measure the same thing or the        
+  training pairs are garbage.                                                   
+    - Wire the backfill at trip completion (Inngest job or the existing         
+  completion path — use what's already there, don't add infra).                 
+    - UPDATE the single trip_predictions row for that trip_id.                  
+  - IF the signal does NOT cleanly exist yet:                                   
+    - Do NOT fake it. Instead, write a clearly-marked stub function             
+  backfillActualBuffer(tripId) with a TODO documenting exactly what data it     
+  needs, and report to me what's missing so I can decide how to capture it.     
+                                                                                
+  SUCCESS                                                                       
+  - 013 SQL produced (dedupe + unique constraint); MIGRATIONS.md updated        
+  applied=N.                                                                    
+  - Leave Now upserts: re-computing the same trip updates one row instead of    
+  adding new ones.                                                              
+  - Failed prediction writes log trip_id + error.                               
+  - actual_buffer_minutes is either correctly backfilled with a stated,         
+  matching definition — or a documented stub with a clear report of what's      
+  missing. No invented data.                                                    
+                                                                                
+  CONSTRAINTS                                                                   
+  Show diagnosis before code. predicted and actual must measure the same        
+  quantity — call out the definition explicitly. Don't add new infrastructure   
+  if an existing completion path works. One concern only.                       
+
+● Investigating first.
+
+  Searched for 1 pattern, read 2 files (ctrl+o to expand)
+● inngest/post-trip.ts is exactly what I need. Let me read it and the poll job:
+
+  Read 2 files (ctrl+o to expand)
+
+● Now let me check runPostTripLearning and the trip_milestones table to
+  understand what's actually captured at trip completion:
+
+  Read 1 file (ctrl+o to expand)
+
+● Let me check the types file and also verify what's in the trip_milestones
+  table schema:
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+● I have everything. Here's the full diagnosis:
+
+  ---
+  Diagnosis
+
+  Current insert (route.ts lines 126–140): plain .insert() with no conflict
+  handling — every POST adds a new row. No guard exists.
+
+  Unique constraint: migration 012 has only a primary key on id. No UNIQUE on
+  trip_id. Confirmed.
+
+  Trip completion signal — what exists:
+  - trips.departure_actual — written by pollFlightStatus every 10 minutes when
+  the aviation API reports the actual gate departure. Reliable and automated.
+  - trip_milestones.at_gate.reached_at — written when the user taps "At Gate" in
+  the app (POST /api/trips/[id]/milestones). Exists in the schema and has a
+  real write path. Not guaranteed — if the user never taps that button, the
+  milestone row won't exist.
+  - inngest/post-trip.ts — onTripCompleted (event-triggered) and
+  dailyLearningRun (3 AM cron) both call runPostTripLearning(userId, tripId).
+  This is the natural backfill hook with no new infrastructure needed.
+
+  Does actual_buffer_minutes have a clean signal? — Partially. departure_actual
+  is reliable. The gate-arrival time exists in the schema but is user-gated. The
+  signal is incomplete: trips where the user never taps "At Gate" produce no
+  measurable actual buffer. I will write the stub.
+
+  Definition alignment:
+  - predicted_buffer_minutes — minutes computeBuffer() recommends as airport
+  cushion: the margin between "at gate" and scheduled departure, after drive +
+  TSA + walk are already accounted for.
+  - actual_buffer_minutes (target definition) — floor((departure_actual − 
+  at_gate.reached_at) / 60_000): minutes the user was actually at the gate
+  before the plane pushed back.
+
+  These measure the same quantity ✓. The gap is the unreliability of the at_gate
+  milestone, not a definition mismatch.
+
+  ---
+  Now the code:
+
+  Migration 013:
+
+● Write(supabase\migrations\013_trip_predictions_unique.sql)
+  ⎿  Wrote 18 lines to supabase\migrations\013_trip_predictions_unique.sql
+       1 -- Step 1: de-dupe — keep the most recent row per trip, delete o
+         lder duplicates.
+       2 -- Required before adding the unique constraint.
+       4 WHERE id NOT IN (
+       5   SELECT DISTINCT ON (trip_id) id
+       6   FROM public.trip_predictions
+       7   ORDER BY trip_id, created_at DESC
+       8 );
+      10 -- Step 2: add updated_at so upserts can record when a predictio
+         n was last refreshed.
+     … +11 lines (ctrl+o to expand)
+
+● Convert insert → upsert with better logging:
+
+● Update(app\api\leave-now\route.ts)
+  ⎿  Added 27 lines, removed 12 lines
+      120    });
+      121  
+      122    // ── Log prediction (fire-and-forget — never blocks the res
+           ponse) ─
+      123 -  // TODO: backfill actual_buffer_minutes here once trip-compl
+          -etion detection exists.                                       
+      124 -  //       When a trip status flips to "landed" or similar, re
+          -ad the user's actual                                          
+      125 -  //       departure time from the milestone log and compute t
+          -he real buffer used.                                          
+      123 +  // Upserts on trip_id: recomputing Leave Now for the same tr
+          +ip refreshes the one                                          
+      124 +  // prediction row instead of accumulating duplicates. actual
+          +_buffer_minutes is                                            
+      125 +  // intentionally omitted here so a previously backfilled val
+          +ue is never overwritten.                                      
+      126 +  // Backfill path: backfillActualBuffer() in lib/agent/learni
+          +ng.ts, called from                                            
+      127 +  // runPostTripLearning after the trip completes.            
+      128    client
+      129      .from("trip_predictions")
+      128 -    .insert({                                                 
+      129 -      trip_id:                  trip.id,                      
+      130 -      user_id:                  user.id,                      
+      131 -      predicted_buffer_minutes: bufferResult.bufferMinutes,   
+      132 -      rule_factors:             bufferResult.factors,         
+      133 -      actual_buffer_minutes:    null,                         
+      134 -    })                                                        
+      130 +    .upsert(                                                  
+      131 +      {                                                       
+      132 +        trip_id:                  trip.id,                    
+      133 +        user_id:                  user.id,                    
+      134 +        predicted_buffer_minutes: bufferResult.bufferMinutes, 
+      135 +        rule_factors:             bufferResult.factors,       
+      136 +        updated_at:               new Date().toISOString(),   
+      137 +        // actual_buffer_minutes omitted — DB null on first in
+          +sert, preserved on conflict                                   
+      138 +      },                                                      
+      139 +      { onConflict: "trip_id" },                              
+      140 +    )                                                         
+      141      .then(({ error }) => {
+      136 -      if (error) console.error("[leave-now] prediction insert 
+          -failed:", error.message);                                     
+      142 +      if (error) {                                            
+      143 +        console.error(                                        
+      144 +          `[leave-now] prediction upsert failed — trip_id=${tr
+          +ip.id} user_id=${user.id}:`,                                  
+      145 +          error.message,                                      
+      146 +          error.details ?? "",                                
+      147 +        );                                                    
+      148 +      }                                                       
+      149      })
+      150      .catch((err: unknown) => {
+      139 -      console.error("[leave-now] prediction insert threw:", er
+          -r);                                                           
+      151 +      console.error(                                          
+      152 +        `[leave-now] prediction upsert threw — trip_id=${trip.
+          +id} user_id=${user.id}:`,                                     
+      153 +        err instanceof Error ? err.message : String(err),     
+      154 +      );                                                      
+      155      });
+      156  
+      157    // ── Build drive note ─────────────────────────────────────
+           ───────
+
+● Add the backfill stub to learning.ts and wire it from runPostTripLearning:
+
+● Update(lib\agent\learning.ts)
+  ⎿  Added 52 lines
+      352    return { signals, preferencesUpdated: updated };
+      353  }
+      354  
+      355 +// ── Prediction backfill ────────────────────────────────────
+          +───────────────                                               
+      356 +//                                                            
+      357 +// Definition (must stay aligned with predicted_buffer_minutes
+          + in bufferEngine.ts):                                         
+      358 +//   actual_buffer_minutes = floor((departure_actual − at_gate
+          +.reached_at) / 60_000)                                        
+      359 +//   = minutes the user was at the gate before the plane actua
+          +lly pushed back.                                              
+      360 +//                                                            
+      361 +// This matches predicted_buffer_minutes, which is the airport
+          + cushion after                                                
+      362 +// drive + TSA + gate walk — i.e. time between "settled at gat
+          +e" and departure.                                             
+      363 +//                                                            
+      364 +// TODO: implement once at_gate milestone capture is confirmed
+          + reliable.                                                    
+      365 +//                                                            
+      366 +// What's missing:                                            
+      367 +//   1. trips.departure_actual — EXISTS and is reliable (writt
+          +en by pollFlightStatus                                        
+      368 +//      every 10 min once the aviation API reports the actual 
+          +gate departure).                                              
+      369 +//   2. trip_milestones.at_gate.reached_at — EXISTS in the sch
+          +ema and write path                                            
+      370 +//      (POST /api/trips/[id]/milestones), but is USER-TAPPED.
+          + If the user never                                            
+      371 +//      taps "At Gate" in the app, this row will not exist and
+          + the actual cannot                                            
+      372 +//      be computed. Decision needed: (a) accept sparse covera
+          +ge and backfill only                                          
+      373 +//      when the milestone is present, or (b) add an automatic
+          + signal (e.g. geofence                                        
+      374 +//      trigger, boarding-pass scan) that sets the milestone w
+          +ithout user action.                                           
+      375 +//                                                            
+      376 +export async function backfillActualBuffer(                   
+      377 +  tripId: string,                                             
+      378 +  userId: string,                                             
+      379 +): Promise<void> {                                            
+      380 +  // TODO: implement this body once the gap above is resolved.
+      381 +  // Sketch:                                                  
+      382 +  //   const supabase = createServiceClient();                
+      383 +  //   const [{ data: milestone }, { data: trip }] = await Pro
+          +mise.all([                                                    
+      384 +  //     supabase.from("trip_milestones")                     
+      385 +  //       .select("reached_at").eq("trip_id", tripId).eq("typ
+          +e", "at_gate").single(),                                      
+      386 +  //     supabase.from("trips")                               
+      387 +  //       .select("departure_actual").eq("id", tripId).single
+          +(),                                                           
+      388 +  //   ]);                                                    
+      389 +  //   if (!milestone?.reached_at || !trip?.departure_actual) 
+          +{                                                             
+      390 +  //     console.warn(`[backfillActualBuffer] missing signal —
+          + trip_id=${tripId}`);                                         
+      391 +  //     return;                                              
+      392 +  //   }                                                      
+      393 +  //   const actual = Math.floor(                             
+      394 +  //     (new Date(trip.departure_actual).getTime() -         
+      395 +  //      new Date(milestone.reached_at).getTime()) / 60_000, 
+      396 +  //   );                                                     
+      397 +  //   if (actual < 0) return; // data anomaly — skip rather t
+          +han store garbage                                             
+      398 +  //   await supabase.from("trip_predictions")                
+      399 +  //     .update({ actual_buffer_minutes: actual })           
+      400 +  //     .eq("trip_id", tripId)                               
+      401 +  //     .is("actual_buffer_minutes", null); // never overwrit
+          +e a value already set                                         
+      402 +  console.warn(                                               
+      403 +    `[backfillActualBuffer] stub — not yet implemented. trip_i
+          +d=${tripId} user_id=${userId}`,                               
+      404 +  );                                                          
+      405 +}                                                             
+      406 +                                                              
+      407  // ── Context injection for agent ────────────────────────────
+           ───────────────
+      408  // Call this at the start of each runAgentLoop to build an aut
+           o-apply context string.
+      409  export async function buildPreferenceContext(userId: string): 
+           Promise<string> {
+
+● Now wire the stub call from runPostTripLearning:
+
+● Update(lib\agent\learning.ts)
+  ⎿  Added 3 lines
+      338      }
+      339    }
+      340  
+      341 +  // ── Backfill actual buffer (best-effort; logs if signal is
+          + missing) ───────                                             
+      342 +  await backfillActualBuffer(tripId, userId);                 
+      343 +                                                              
+      344    // ── Log learning run ─────────────────────────────────────
+           ────────────────
+      345    await supabase.from("trip_events").insert({
+      346      user_id: userId,
+
+● Now add trip_predictions to the types file and update MIGRATIONS.md:
+
+● Update(lib\supabase\types.ts)
+  ⎿  Added 14 lines
+      167          Insert: Omit<Database["public"]["Tables"]["notificatio
+           ns"]["Row"], "id" | "created_at">;
+      168          Update: Partial<Database["public"]["Tables"]["notifica
+           tions"]["Insert"]>;
+      169        };
+      170 +      trip_predictions: {                                     
+      171 +        Row: {                                                
+      172 +          id: string;                                         
+      173 +          trip_id: string;                                    
+      174 +          user_id: string;                                    
+      175 +          predicted_buffer_minutes: number;                   
+      176 +          actual_buffer_minutes: number | null;               
+      177 +          rule_factors: Json | null;                          
+      178 +          created_at: string;                                 
+      179 +          updated_at: string;  // added by migration 013      
+      180 +        };                                                    
+      181 +        Insert: Omit<Database["public"]["Tables"]["trip_predic
+          +tions"]["Row"], "id" | "created_at" | "updated_at">;          
+      182 +        Update: Partial<Database["public"]["Tables"]["trip_pre
+          +dictions"]["Insert"]>;                                        
+      183 +      };                                                      
+      184      };
+      185    };
+      186  }
+
+● Update(docs\MIGRATIONS.md)
+  ⎿  Added 1 line
+      16  | `010_traveler_profile.sql` | Y | 2026-06-30 | users: has_real
+          _id, has_clear, known_traveler_number, lounge_memberships |
+      17  | `011_onboarding_fields.sql` | Y | 2026-06-30 | users: arrival
+          _buffer_minutes, travel_frequency, trip_scope, travels_with, tr
+          avel_stressors, family_auto_updates, home_airport, onboarding_c
+          ompleted |
+      18  | `012_trip_predictions.sql` | N | — | New table: trip_predicti
+          ons (predicted_buffer_minutes, actual_buffer_minutes, rule_fact
+          ors jsonb); RLS own-rows |
+      19 +| `013_trip_predictions_unique.sql` | N | — | trip_predictions:
+         + de-dupe existing rows, add updated_at, add UNIQUE(trip_id) |  
+
+● ---
+  Migration 013 SQL to paste into Supabase SQL Editor
+
+  -- Step 1: de-dupe — keep the most recent row per trip, delete older 
+  duplicates.
+  DELETE FROM public.trip_predictions
+  WHERE id NOT IN (
+    SELECT DISTINCT ON (trip_id) id
+    FROM public.trip_predictions
+    ORDER BY trip_id, created_at DESC
+  );
+
+  -- Step 2: add updated_at so upserts can record when a prediction was last 
+  refreshed.
+  ALTER TABLE public.trip_predictions
+    ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+
+  UPDATE public.trip_predictions SET updated_at = created_at;
+
+  -- Step 3: enforce one prediction row per trip.
+  ALTER TABLE public.trip_predictions
+    ADD CONSTRAINT trip_predictions_trip_id_unique UNIQUE (trip_id);
+
+  Run this, then flip 013 in docs/MIGRATIONS.md to Y.
+
+  ---
+  What changed and what's missing
+
+  Route (leave-now/route.ts): .insert() → .upsert({ onConflict: "trip_id" }).
+  actual_buffer_minutes is intentionally absent from the upsert object so it is
+  null on first insert and untouched on subsequent updates. Failure log now
+  includes trip_id and error.details.
+
+  Learning (lib/agent/learning.ts): backfillActualBuffer(tripId, userId) stub
+  added and wired into runPostTripLearning, which is already called by both the
+  event-triggered onTripCompleted and the 3 AM dailyLearningRun. The stub body
+  is a fully-written sketch inside a comment block — uncomment and remove the
+  console.warn once you resolve the gap below.
+
+  What's missing for actual backfill: trips.departure_actual is reliable. The
+  gap is trip_milestones.at_gate — it requires the user to tap "At Gate" in the
+  app. Decision you need to make: accept sparse coverage (backfill only for
+  trips where the milestone is present), or add an automatic trigger for at_gate
+  (geofence, boarding pass scan, etc.). The stub comment documents both
+  options.
+
+✻ Crunched for 4m 1s
+
+※ recap: Building GateReady's Leave Now buffer engine with labeled training data for a future ML model. Migrations 012 and 013 need to be run in the Supabase SQL Editor to go live.

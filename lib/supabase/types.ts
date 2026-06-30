@@ -23,9 +23,17 @@ export interface Database {
           has_real_id: boolean;
           has_clear: boolean;
           known_traveler_number: string | null;
-          lounge_memberships: string[] | null;
-          preferred_transport: string;
-          accessibility_needs: string[] | null;
+          lounge_memberships:     string[] | null;
+          preferred_transport:    string;
+          accessibility_needs:    string[] | null;
+          arrival_buffer_minutes: number;
+          travel_frequency:       string | null;
+          trip_scope:             string | null;
+          travels_with:           string | null;
+          travel_stressors:       string[] | null;
+          family_auto_updates:    boolean;
+          home_airport:           string | null;
+          onboarding_completed:   boolean;
           created_at: string;
         };
         Insert: Omit<Database["public"]["Tables"]["users"]["Row"], "created_at">;
@@ -158,6 +166,20 @@ export interface Database {
         };
         Insert: Omit<Database["public"]["Tables"]["notifications"]["Row"], "id" | "created_at">;
         Update: Partial<Database["public"]["Tables"]["notifications"]["Insert"]>;
+      };
+      trip_predictions: {
+        Row: {
+          id: string;
+          trip_id: string;
+          user_id: string;
+          predicted_buffer_minutes: number;
+          actual_buffer_minutes: number | null;
+          rule_factors: Json | null;
+          created_at: string;
+          updated_at: string;  // added by migration 013
+        };
+        Insert: Omit<Database["public"]["Tables"]["trip_predictions"]["Row"], "id" | "created_at" | "updated_at">;
+        Update: Partial<Database["public"]["Tables"]["trip_predictions"]["Insert"]>;
       };
     };
   };

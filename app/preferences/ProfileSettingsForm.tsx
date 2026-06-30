@@ -23,20 +23,29 @@ const ACCESS_OPTIONS = ["Wheelchair", "Visual impairment", "Hearing impairment",
 
 export function ProfileSettingsForm({ userId, initialProfile }: { userId: string; initialProfile: Profile }) {
   const [profile, setProfile] = useState<Profile>(initialProfile);
-  const [saving, setSaving]   = useState(false);
-  const [saved, setSaved]     = useState(false);
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
 
   async function save() {
     setSaving(true);
     setSaved(false);
+    setSaveErr(null);
     try {
-      await fetch("/api/preferences/profile", {
+      const res = await fetch("/api/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(profile),
       });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({})) as { error?: string };
+        setSaveErr(json.error ?? `Save failed (${res.status})`);
+        return;
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      setSaveErr(err instanceof Error ? err.message : "Network error");
     } finally {
       setSaving(false);
     }
@@ -168,6 +177,10 @@ export function ProfileSettingsForm({ userId, initialProfile }: { userId: string
         {saved   && <CheckCircle2 className="h-4 w-4" />}
         {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
       </button>
+
+      {saveErr && (
+        <p className="text-xs text-center" style={{ color: "#DC2626" }}>{saveErr}</p>
+      )}
     </div>
   );
 }

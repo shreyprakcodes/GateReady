@@ -127,7 +127,7 @@ function SmartBuffer({ depIso, tz, accent }: { depIso: string | null; tz?: strin
 
 interface JStep { time: Date; label: string; detail: string; icon: React.ReactNode; done: boolean }
 
-function buildJourneySteps(trip: Trip, tsaMin: number, driveMin: number): JStep[] {
+function buildJourneySteps(trip: Trip, tsaMin: number, driveMin: number | null): JStep[] {
   if (!trip.departure_time) return [];
 
   const dep    = new Date(trip.departure_time);
@@ -135,18 +135,24 @@ function buildJourneySteps(trip: Trip, tsaMin: number, driveMin: number): JStep[
   const gate   = new Date(board.getTime() - 8  * 60_000);
   const tsaEnd = new Date(gate.getTime()  - tsaMin * 60_000);
   const arrive = new Date(tsaEnd.getTime() - 10 * 60_000);
-  const leave  = new Date(arrive.getTime() - driveMin * 60_000 - 10 * 60_000);
 
   const now = new Date();
 
-  return [
-    { time: leave,  label: "Leave Home",        detail: `${driveMin} min drive`,               icon: "🚗", done: now > leave  },
-    { time: arrive, label: "Arrive at Airport",  detail: "+10 min parking",                      icon: "🅿️", done: now > arrive },
-    { time: tsaEnd, label: "Through Security",   detail: `~${tsaMin} min wait`,                  icon: "🛡️", done: now > tsaEnd },
-    { time: gate,   label: "Walk to Gate",       detail: `Gate ${trip.gate ?? "—"}`,             icon: "🚶", done: now > gate   },
-    { time: board,  label: "Boarding",           detail: `${trip.airline ?? ""} ${trip.flight_number ?? ""}`, icon: "🎫", done: now > board },
-    { time: dep,    label: "Departure",          detail: `Terminal ${trip.terminal ?? "—"}`,     icon: "✈️", done: now > dep   },
+  const steps: JStep[] = [
+    { time: arrive, label: "Arrive at Airport", detail: "+10 min parking",                                            icon: "🅿️", done: now > arrive },
+    { time: tsaEnd, label: "Through Security",  detail: `~${tsaMin} min wait`,                                        icon: "🛡️", done: now > tsaEnd },
+    { time: gate,   label: "Walk to Gate",      detail: `Gate ${trip.gate ?? "—"}`,                                   icon: "🚶", done: now > gate   },
+    { time: board,  label: "Boarding",          detail: `${trip.airline ?? ""} ${trip.flight_number ?? ""}`,          icon: "🎫", done: now > board  },
+    { time: dep,    label: "Departure",         detail: `Terminal ${trip.terminal ?? "—"}`,                           icon: "✈️", done: now > dep    },
   ];
+
+  // Only add "Leave Home" when we have a real drive time — never show a placeholder.
+  if (driveMin !== null) {
+    const leave = new Date(arrive.getTime() - driveMin * 60_000 - 10 * 60_000);
+    steps.unshift({ time: leave, label: "Leave Home", detail: `${driveMin} min drive`, icon: "🚗", done: now > leave });
+  }
+
+  return steps;
 }
 
 // ─── Journey step row ─────────────────────────────────────────────────────────
@@ -245,7 +251,7 @@ export default function TripDetailPage() {
   const [loading, setLoading]    = useState(true);
   const [error, setError]        = useState("");
   const [tab, setTab]            = useState<TabKey>("Itinerary");
-  const [driveMin]               = useState(45);
+  const [driveMin, setDriveMin]  = useState<number | null>(null);
   const [routeIdx, setRouteIdx]  = useState(0);
   const [routeKey, setRouteKey]  = useState(0);
 
@@ -253,7 +259,7 @@ export default function TripDetailPage() {
   const setTripIdStore = useStore((s) => s.setTripId);
   const storeTrip      = useStore((s) => s.trip);
 
-  const { data: tsaData } = useTsaWaitTime(trip?.origin ?? null);
+  const { data: tsaData, loadState: tsaLoadState } = useTsaWaitTime(trip?.origin ?? null);
   const tsaMin = tsaData?.lanes?.[0]?.waitMinutes ?? 15;
 
   // Derive airline theme from flight number prefix
@@ -385,7 +391,13 @@ export default function TripDetailPage() {
               />
 
               {/* Leave Now Engine */}
-              <LeaveNowCard />
+              <LeaveNowCard
+                onDataLoaded={(data) => {
+                  if (!data.inputs.drive.unavailable) {
+                    setDriveMin(data.inputs.drive.minutes);
+                  }
+                }}
+              />
 
               {/* Travel day progress */}
               <MilestonePanel tripId={trip.id} />
@@ -444,15 +456,26 @@ export default function TripDetailPage() {
                   selectedRouteIndex={routeIdx}
                   airportCode={trip.origin ?? undefined}
                   refreshKey={routeKey}
-                  onRoutesLoaded={() => {}}
+                  onRoutesLoaded={(routes) => {
+                    const best = routes[0];
+                    if (!best) return;
+                    const secs = best.durationInTrafficSeconds ?? best.durationSeconds;
+                    setDriveMin(Math.round(secs / 60));
+                  }}
                 />
                 <div
                   className="absolute top-4 left-4 rounded-2xl px-4 py-3 flex items-center gap-2"
                   style={{ backgroundColor: C.card, boxShadow: "0 4px 20px rgba(0,0,0,0.12)" }}
                 >
                   <Clock className="h-4 w-4" style={{ color: theme.primary }} />
-                  <span className="text-base font-bold" style={{ color: C.text }}>{driveMin} min</span>
-                  <span className="text-xs" style={{ color: C.muted }}>drive</span>
+                  {driveMin !== null ? (
+                    <>
+                      <span className="text-base font-bold" style={{ color: C.text }}>{driveMin} min</span>
+                      <span className="text-xs" style={{ color: C.muted }}>drive</span>
+                    </>
+                  ) : (
+                    <span className="text-sm" style={{ color: C.muted }}>Calculating…</span>
+                  )}
                 </div>
               </div>
 
@@ -553,7 +576,9 @@ export default function TripDetailPage() {
                   <div className="flex-1">
                     <p className="text-sm font-semibold" style={{ color: C.text }}>TSA Wait · {trip.origin}</p>
                     <p className="text-xs" style={{ color: C.muted }}>
-                      {tsaData ? `~${tsaMin} min` : "Loading…"}
+                      {tsaData
+                        ? <>~{tsaMin} min{tsaLoadState === "historical" && <span className="ml-1" style={{ color: "#B5A89A" }}>(est)</span>}</>
+                        : "Loading…"}
                     </p>
                   </div>
                   <Link href="/tsa" className="text-xs font-semibold" style={{ color: theme.primary }}>Details</Link>

@@ -307,7 +307,7 @@ export function TripReadinessCard({ origin, destination, tripId }: Props) {
               : "Set up your profile for personalized tips"}
         </p>
         <Link
-          href="/profile"
+          href="/settings/travel-docs"
           className="flex items-center gap-1 text-xs font-semibold shrink-0"
           style={{ color: "#4F46E5" }}
         >

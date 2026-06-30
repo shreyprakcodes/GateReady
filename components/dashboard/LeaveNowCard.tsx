@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { AlertCircle, Loader2, MapPin, Navigation, RefreshCw } from "lucide-react";
 import { useStore } from "@/lib/store/useStore";
 import { useUserLocation } from "@/src/hooks/useUserLocation";
@@ -26,11 +27,12 @@ interface LeaveNowData {
   segments:             { label: string; minutes: number }[];
   inputs: {
     drive: {
-      minutes:     number;
-      isLive:      boolean;
-      note?:       string;
+      minutes:      number;
+      isLive:       boolean;
+      note?:        string;
       unavailable?: boolean;
-      distanceKm?: number;
+      distanceKm?:  number;
+      source?:      "gps" | "home" | "none";
     };
     tsa:        { minutes: number; source: string; note?: string };
     walkToGate: { minutes: number };
@@ -90,7 +92,7 @@ function BreakdownRow({
 
 // ─── Main component ───────────────────────────────────────────────
 
-export function LeaveNowCard() {
+export function LeaveNowCard({ onDataLoaded }: { onDataLoaded?: (data: LeaveNowData) => void } = {}) {
   const trip = useStore((s) => s.getActiveFlight());
   const { lat, lng, permissionState, isLoading: locLoading, requestPermission } =
     useUserLocation();
@@ -132,7 +134,9 @@ export function LeaveNowCard() {
 
       const json = await res.json();
       if (!res.ok) { setFetchErr(json.error ?? "Could not compute leave time"); return; }
-      setData(json as LeaveNowData);
+      const leaveData = json as LeaveNowData;
+      setData(leaveData);
+      onDataLoaded?.(leaveData);
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         setFetchErr("Could not compute leave time");
@@ -280,17 +284,32 @@ export function LeaveNowCard() {
           style={{ borderTop: "1px solid #F0EDE8" }}
         >
           {data.inputs.drive.unavailable ? (
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="text-base leading-none shrink-0">🚗</span>
-                <span className="text-sm truncate" style={{ color: "#8B8070" }}>
-                  Drive to airport
+            <>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-base leading-none shrink-0">🚗</span>
+                  <span className="text-sm truncate" style={{ color: "#8B8070" }}>
+                    Drive to airport
+                  </span>
+                </div>
+                <span className="text-sm font-bold shrink-0" style={{ color: "#B5A89A" }}>
+                  N/A
                 </span>
               </div>
-              <span className="text-sm font-bold shrink-0" style={{ color: "#B5A89A" }}>
-                N/A
-              </span>
-            </div>
+              {data.inputs.drive.source === "none" ? (
+                <p className="text-[11px] leading-relaxed" style={{ color: "#B5A89A" }}>
+                  No starting point set.{" "}
+                  <Link href="/settings/preferences" className="underline" style={{ color: "#8B8070" }}>
+                    Set home address
+                  </Link>{" "}
+                  or share your location below.
+                </p>
+              ) : data.inputs.drive.note ? (
+                <p className="text-[11px] leading-relaxed" style={{ color: "#B5A89A" }}>
+                  {data.inputs.drive.note}
+                </p>
+              ) : null}
+            </>
           ) : (
             <BreakdownRow
               icon="🚗"
@@ -298,11 +317,6 @@ export function LeaveNowCard() {
               minutes={data.inputs.drive.minutes}
               estimated={!data.inputs.drive.isLive}
             />
-          )}
-          {data.inputs.drive.unavailable && data.inputs.drive.note && (
-            <p className="text-[11px] leading-relaxed" style={{ color: "#B5A89A" }}>
-              {data.inputs.drive.note}
-            </p>
           )}
           <BreakdownRow
             icon="🛡️"

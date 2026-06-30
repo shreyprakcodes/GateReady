@@ -338,6 +338,9 @@ export async function runPostTripLearning(
     }
   }
 
+  // ── Backfill actual buffer (best-effort; logs if signal is missing) ───────
+  await backfillActualBuffer(tripId, userId);
+
   // ── Log learning run ─────────────────────────────────────────────────────
   await supabase.from("trip_events").insert({
     user_id: userId,
@@ -350,6 +353,58 @@ export async function runPostTripLearning(
   });
 
   return { signals, preferencesUpdated: updated };
+}
+
+// ── Prediction backfill ───────────────────────────────────────────────────
+//
+// Definition (must stay aligned with predicted_buffer_minutes in bufferEngine.ts):
+//   actual_buffer_minutes = floor((departure_actual − at_gate.reached_at) / 60_000)
+//   = minutes the user was at the gate before the plane actually pushed back.
+//
+// This matches predicted_buffer_minutes, which is the airport cushion after
+// drive + TSA + gate walk — i.e. time between "settled at gate" and departure.
+//
+// TODO: implement once at_gate milestone capture is confirmed reliable.
+//
+// What's missing:
+//   1. trips.departure_actual — EXISTS and is reliable (written by pollFlightStatus
+//      every 10 min once the aviation API reports the actual gate departure).
+//   2. trip_milestones.at_gate.reached_at — EXISTS in the schema and write path
+//      (POST /api/trips/[id]/milestones), but is USER-TAPPED. If the user never
+//      taps "At Gate" in the app, this row will not exist and the actual cannot
+//      be computed. Decision needed: (a) accept sparse coverage and backfill only
+//      when the milestone is present, or (b) add an automatic signal (e.g. geofence
+//      trigger, boarding-pass scan) that sets the milestone without user action.
+//
+export async function backfillActualBuffer(
+  tripId: string,
+  userId: string,
+): Promise<void> {
+  // TODO: implement this body once the gap above is resolved.
+  // Sketch:
+  //   const supabase = createServiceClient();
+  //   const [{ data: milestone }, { data: trip }] = await Promise.all([
+  //     supabase.from("trip_milestones")
+  //       .select("reached_at").eq("trip_id", tripId).eq("type", "at_gate").single(),
+  //     supabase.from("trips")
+  //       .select("departure_actual").eq("id", tripId).single(),
+  //   ]);
+  //   if (!milestone?.reached_at || !trip?.departure_actual) {
+  //     console.warn(`[backfillActualBuffer] missing signal — trip_id=${tripId}`);
+  //     return;
+  //   }
+  //   const actual = Math.floor(
+  //     (new Date(trip.departure_actual).getTime() -
+  //      new Date(milestone.reached_at).getTime()) / 60_000,
+  //   );
+  //   if (actual < 0) return; // data anomaly — skip rather than store garbage
+  //   await supabase.from("trip_predictions")
+  //     .update({ actual_buffer_minutes: actual })
+  //     .eq("trip_id", tripId)
+  //     .is("actual_buffer_minutes", null); // never overwrite a value already set
+  console.warn(
+    `[backfillActualBuffer] stub — not yet implemented. trip_id=${tripId} user_id=${userId}`,
+  );
 }
 
 // ── Context injection for agent ───────────────────────────────────────────

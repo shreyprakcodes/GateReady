@@ -6,13 +6,21 @@ const READABLE_FIELDS = [
   "tsa_precheck", "global_entry",
   "has_real_id", "has_clear", "known_traveler_number",
   "lounge_memberships",
+  "preferred_transport", "accessibility_needs",
+  "arrival_buffer_minutes", "travel_frequency", "trip_scope",
+  "travels_with", "travel_stressors", "family_auto_updates",
+  "home_airport", "onboarding_completed",
 ] as const;
 
 const WRITABLE_FIELDS = new Set([
-  "name",
+  "name", "home_address",
   "tsa_precheck", "global_entry",
   "has_real_id", "has_clear", "known_traveler_number",
   "lounge_memberships",
+  "preferred_transport", "accessibility_needs",
+  "arrival_buffer_minutes", "travel_frequency", "trip_scope",
+  "travels_with", "travel_stressors", "family_auto_updates",
+  "home_airport", "onboarding_completed",
 ]);
 
 export async function GET() {
