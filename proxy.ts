@@ -1,9 +1,12 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/signup", "/auth/callback", "/api/debug/signin", "/api/debug/aviation", "/s/", "/api/share/"];
+// Every entry here bypasses auth entirely (see the `isPublic` check below) —
+// review carefully before adding a path, and confirm the route enforces its
+// own authorization if it touches anything user-specific.
+const PUBLIC_PATHS = ["/login", "/signup", "/auth/callback", "/s/", "/api/share/"];
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
