@@ -14,6 +14,7 @@ import { useFamilyStore } from "@/src/store/familyStore";
 import { BottomNav } from "@/components/dashboard/BottomNav";
 import type { Database } from "@/lib/supabase/types";
 import { fmtFlightTime, fmtFlightDate, fmtDayLabel, resolveFlightTime } from "@/lib/utils/time";
+import { computeBuffer, getBufferComfort, MIN_BUFFER, MAX_BUFFER, type BufferFactor } from "@/lib/bufferEngine";
 
 type Trip = Database["public"]["Tables"]["trips"]["Row"];
 
@@ -243,12 +244,82 @@ function WidgetPreview({ trip }: { trip: Trip | null }) {
 
 // ─── Travel Companion sidebar ─────────────────────────────────────────────────
 
-function TravelCompanion() {
+type BufferProfile = Pick<
+  Database["public"]["Tables"]["users"]["Row"],
+  "arrival_buffer_minutes" | "trip_scope" | "travel_stressors"
+>;
+
+// Mirrors app/api/leave-now/route.ts's localDepartureHour — duplicated here
+// (rather than imported) since that file is a server-only route handler and
+// isn't importable from this client component.
+function localDepartureHour(date: Date, timezone: string | null): number {
+  if (!timezone) return date.getUTCHours();
+  try {
+    const hourStr = new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      hour12: false,
+      timeZone: timezone,
+    }).format(date);
+    const hour = parseInt(hourStr, 10);
+    return isNaN(hour) ? date.getUTCHours() : hour % 24;
+  } catch {
+    return date.getUTCHours();
+  }
+}
+
+// Largest-magnitude non-base rule factor — same "top reason" logic as
+// LeaveNowCard's onTimeRationale, duplicated locally since that component
+// isn't in scope here.
+function topFactorReason(factors: BufferFactor[]): string | null {
+  const nonBase = factors.filter((f) => f.rule !== "base");
+  if (!nonBase.length) return null;
+  const top = nonBase.reduce((a, b) =>
+    Math.abs(b.adjustmentMinutes) > Math.abs(a.adjustmentMinutes) ? b : a
+  );
+  return top.reason;
+}
+
+function clamp01(n: number): number {
+  return Math.max(0, Math.min(1, n));
+}
+
+function TravelCompanion({ trip }: { trip: Trip | null }) {
   const members = useFamilyStore((s) => s.members);
-  const bufPct  = 85;
-  const r       = 28;
-  const circ    = 2 * Math.PI * r;
-  const offset  = circ * (1 - bufPct / 100);
+  const [profile, setProfile] = useState<BufferProfile | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/profile")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json: { profile: BufferProfile } | null) => {
+        if (!cancelled && json?.profile) setProfile(json.profile);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const bufferResult = useMemo(() => {
+    if (!trip?.departure_time || !profile) return null;
+    return computeBuffer({
+      baseBufferMinutes: profile.arrival_buffer_minutes ?? 20,
+      departureHour:     localDepartureHour(new Date(trip.departure_time), trip.departure_timezone ?? null),
+      airportIata:       trip.origin ?? null,
+      tripScope:         profile.trip_scope ?? null,
+      travelStressors:   profile.travel_stressors ?? null,
+    });
+  }, [trip, profile]);
+
+  const comfort = bufferResult ? getBufferComfort(bufferResult.bufferMinutes) : null;
+  const subtext = bufferResult
+    ? topFactorReason(bufferResult.factors) ?? "Matches your saved travel preferences"
+    : "";
+  const fill = bufferResult
+    ? clamp01((bufferResult.bufferMinutes - MIN_BUFFER) / (MAX_BUFFER - MIN_BUFFER))
+    : 0;
+
+  const r      = 28;
+  const circ   = 2 * Math.PI * r;
+  const offset = circ * (1 - fill);
 
   return (
     <aside
@@ -304,20 +375,34 @@ function TravelCompanion() {
         <p className="text-[10px] font-bold uppercase tracking-widest mb-4" style={{ color: C.secondary }}>
           Smart Buffer
         </p>
-        <div className="flex flex-col items-center gap-2">
-          <div className="shrink-0" style={{ position: "relative", width: 72, height: 72 }}>
-            <svg width={72} height={72} style={{ transform: "rotate(-90deg)", display: "block" }}>
-              <circle cx={36} cy={36} r={r} fill="none" stroke={C.border} strokeWidth={7} />
-              <circle cx={36} cy={36} r={r} fill="none" stroke={C.success} strokeWidth={7}
-                strokeDasharray={`${circ}`} strokeDashoffset={`${offset}`} strokeLinecap="round" />
-            </svg>
-            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span className="text-sm font-bold" style={{ color: C.success }}>{bufPct}%</span>
-            </div>
+        {!trip ? (
+          <p className="text-xs" style={{ color: C.secondary }}>No upcoming trip</p>
+        ) : !bufferResult ? (
+          <div className="flex flex-col items-center gap-2 py-1 animate-pulse">
+            <div className="rounded-full" style={{ width: 72, height: 72, backgroundColor: C.border }} />
+            <div className="h-3 w-20 rounded" style={{ backgroundColor: C.border }} />
           </div>
-          <p className="text-sm font-semibold" style={{ color: C.text }}>Comfortable</p>
-          <p className="text-xs text-center" style={{ color: C.secondary }}>Plenty of time before departure</p>
-        </div>
+        ) : (
+          <div className="flex flex-col items-center gap-2">
+            <div className="shrink-0" style={{ position: "relative", width: 72, height: 72 }}>
+              <svg width={72} height={72} style={{ transform: "rotate(-90deg)", display: "block" }}>
+                <circle cx={36} cy={36} r={r} fill="none" stroke={C.border} strokeWidth={7} />
+                <circle cx={36} cy={36} r={r} fill="none" stroke={C.success} strokeWidth={7}
+                  strokeDasharray={`${circ}`} strokeDashoffset={`${offset}`} strokeLinecap="round" />
+              </svg>
+              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                <span className="text-sm font-bold leading-none" style={{ color: C.success }}>
+                  {Math.round(bufferResult.bufferMinutes)}
+                </span>
+                <span className="text-[9px] font-semibold mt-0.5" style={{ color: C.secondary }}>
+                  min
+                </span>
+              </div>
+            </div>
+            <p className="text-sm font-semibold" style={{ color: C.text }}>{comfort!.label}</p>
+            <p className="text-xs text-center" style={{ color: C.secondary }}>{subtext}</p>
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -684,7 +769,7 @@ export default function DashboardPage() {
         <div className="max-w-5xl mx-auto flex gap-8 px-4 sm:px-6">
 
           {/* Travel Companion sidebar (lg+) */}
-          <TravelCompanion />
+          <TravelCompanion trip={activeTrip} />
 
           {/* Main content */}
           <div className="flex-1 min-w-0 pt-8">

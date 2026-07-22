@@ -29,8 +29,8 @@ const LARGE_HUB_IATA = new Set([
   "PHL", "SLC", "BWI", "IAD", "MDW",
 ]);
 
-const MIN_BUFFER = 10;
-const MAX_BUFFER = 90;
+export const MIN_BUFFER = 10;
+export const MAX_BUFFER = 90;
 
 export function computeBuffer(input: BufferInput): BufferResult {
   const { baseBufferMinutes, departureHour, airportIata, tripScope, travelStressors } = input;
@@ -117,4 +117,23 @@ export function computeBuffer(input: BufferInput): BufferResult {
   );
 
   return { bufferMinutes, factors };
+}
+
+// ── Comfort label (buffer-amount axis) ──────────────────────────────────────
+// A qualitative read on the SIZE of the buffer itself — how much cushion the
+// engine gave you. This is intentionally separate from LeaveNowCard's
+// STATUS_CFG (lib/leaveNow.ts), which answers a different question — how much
+// time is left before you must leave — not how generous that buffer is.
+export type BufferComfortTier = "tight" | "balanced" | "comfortable" | "extra-cushion";
+
+export interface BufferComfort {
+  tier: BufferComfortTier;
+  label: string;
+}
+
+export function getBufferComfort(bufferMinutes: number): BufferComfort {
+  if (bufferMinutes < 21) return { tier: "tight", label: "Tight" };
+  if (bufferMinutes < 41) return { tier: "balanced", label: "Comfortable" };
+  if (bufferMinutes < 66) return { tier: "comfortable", label: "Relaxed" };
+  return { tier: "extra-cushion", label: "Extra cushion" };
 }
