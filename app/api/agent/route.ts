@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { runAgentLoop } from "@/lib/agent/loop";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient, createSessionClient } from "@/lib/supabase/server";
 import { buildPreferenceContext } from "@/lib/agent/learning";
 import type { ToolCall, ToolResult } from "@/lib/agent/loop";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -10,20 +10,26 @@ function sse(data: object): Uint8Array {
 }
 
 export async function POST(request: NextRequest) {
+  // Identity is derived from the session — never trust a client-supplied userId.
+  const sessionClient = await createSessionClient();
+  const { data: { user }, error: authErr } = await sessionClient.auth.getUser();
+  if (authErr || !user) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
+  }
+  const userId = user.id;
+
   const body = await request.json();
   const {
     message,
-    userId,
     tripId,
     history = [],
   }: {
     message: string;
-    userId: string;
     tripId: string;
     history: Anthropic.MessageParam[];
   } = body;
 
-  if (!message || !userId) {
+  if (!message) {
     return new Response(JSON.stringify({ error: "Missing required fields" }), {
       status: 400,
     });
@@ -34,11 +40,23 @@ export async function POST(request: NextRequest) {
 
   const supabase = createServiceClient();
 
-  // Load trip context and high-confidence preferences in parallel
-  const [{ data: trip }, preferenceContext] = await Promise.all([
-    supabase.from("trips").select("*").eq("id", tripId).single(),
+  // Load trip context (scoped to the caller) and high-confidence preferences
+  // in parallel. A tripId that doesn't belong to this user is never fetched —
+  // the agent must not be able to see or act on someone else's trip.
+  const [tripQuery, preferenceContext] = await Promise.all([
+    tripId
+      ? supabase.from("trips").select("*").eq("id", tripId).eq("user_id", userId).single()
+      : Promise.resolve(null),
     buildPreferenceContext(userId),
   ]);
+
+  if (tripId && !tripQuery?.data) {
+    return new Response(JSON.stringify({ error: "Trip not found or access denied" }), {
+      status: 403,
+    });
+  }
+
+  const trip = tripQuery?.data ?? null;
 
   // Build full context prefix: trip details + auto-apply preferences
   const parts: string[] = [];
