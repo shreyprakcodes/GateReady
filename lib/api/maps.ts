@@ -102,7 +102,9 @@ export async function getDriveTime(
       `&traffic_model=best_guess` +
       `&key=${MAPS_KEY}`;
 
-    const res = await fetch(url, { cache: "no-store" });
+    // Bounded so a hung Maps call can never stall the leave-now response —
+    // the existing catch below turns the resulting AbortError into FALLBACK.
+    const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(6_000) });
     if (!res.ok) {
       console.warn(`[maps] getDriveTime HTTP ${res.status} for ${airportIata}`);
       return FALLBACK;
