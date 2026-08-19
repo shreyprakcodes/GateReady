@@ -109,3 +109,116 @@ export function fmtDayLabel(
   const dayStr = d.toLocaleDateString("en-US", { weekday: "short", ...opts }).toUpperCase();
   return `${dayStr} • ${dateStr}`;
 }
+
+// ── Airport-local time ────────────────────────────────────────────────────
+// Static IATA → IANA timezone map, sized to match lib/airportCoords.ts.
+// Used to answer "what hour is it AT THE AIRPORT right now" — distinct from
+// server time or the viewer's browser time. Needed for anything that indexes
+// an hour-of-day table (e.g. TSA historical wait curves) keyed by local hour.
+
+const AIRPORT_TIMEZONES: Record<string, string> = {
+  // ── North America ──────────────────────────────────────────────────────
+  JFK: "America/New_York",    EWR: "America/New_York",    LGA: "America/New_York",
+  LAX: "America/Los_Angeles", SFO: "America/Los_Angeles", SAN: "America/Los_Angeles",
+  ORD: "America/Chicago",     MDW: "America/Chicago",
+  ATL: "America/New_York",    DFW: "America/Chicago",     IAH: "America/Chicago",
+  PHX: "America/Phoenix",     DEN: "America/Denver",      LAS: "America/Los_Angeles",
+  SEA: "America/Los_Angeles", MIA: "America/New_York",    MCO: "America/New_York",
+  BOS: "America/New_York",    PHL: "America/New_York",    CLT: "America/New_York",
+  IAD: "America/New_York",    DCA: "America/New_York",
+  MSP: "America/Chicago",     DTW: "America/New_York",    MKE: "America/Chicago",
+  SLC: "America/Denver",      PDX: "America/Los_Angeles", SMF: "America/Los_Angeles",
+  TPA: "America/New_York",    RSW: "America/New_York",
+  HNL: "Pacific/Honolulu",    ANC: "America/Anchorage",
+  YYZ: "America/Toronto",     YVR: "America/Vancouver",   YUL: "America/Toronto",
+  MEX: "America/Mexico_City", CUN: "America/Cancun",      GDL: "America/Mexico_City",
+  // ── Europe ─────────────────────────────────────────────────────────────
+  LHR: "Europe/London",  LGW: "Europe/London",  LCY: "Europe/London",  STN: "Europe/London",
+  CDG: "Europe/Paris",   ORY: "Europe/Paris",
+  AMS: "Europe/Amsterdam",
+  FRA: "Europe/Berlin",  DUS: "Europe/Berlin",  HAM: "Europe/Berlin",  MUC: "Europe/Berlin",
+  MAD: "Europe/Madrid",  BCN: "Europe/Madrid",
+  MXP: "Europe/Rome",    FCO: "Europe/Rome",    LIN: "Europe/Rome",
+  ZRH: "Europe/Zurich",
+  VIE: "Europe/Vienna",
+  CPH: "Europe/Copenhagen",
+  ARN: "Europe/Stockholm",
+  HEL: "Europe/Helsinki",
+  IST: "Europe/Istanbul", SAW: "Europe/Istanbul",
+  LIS: "Europe/Lisbon",   OPO: "Europe/Lisbon",
+  BRU: "Europe/Brussels",
+  PRG: "Europe/Prague",
+  WAW: "Europe/Warsaw",
+  BUD: "Europe/Budapest",
+  ATH: "Europe/Athens",
+  // ── Middle East ────────────────────────────────────────────────────────
+  DXB: "Asia/Dubai", AUH: "Asia/Dubai",
+  DOH: "Asia/Qatar",
+  RUH: "Asia/Riyadh",
+  KWI: "Asia/Kuwait",
+  TLV: "Asia/Jerusalem",
+  // ── Asia-Pacific ───────────────────────────────────────────────────────
+  NRT: "Asia/Tokyo", HND: "Asia/Tokyo", KIX: "Asia/Tokyo",
+  ICN: "Asia/Seoul", GMP: "Asia/Seoul",
+  PEK: "Asia/Shanghai", PKX: "Asia/Shanghai", PVG: "Asia/Shanghai", SHA: "Asia/Shanghai",
+  HKG: "Asia/Hong_Kong",
+  BKK: "Asia/Bangkok", DMK: "Asia/Bangkok",
+  SIN: "Asia/Singapore",
+  KUL: "Asia/Kuala_Lumpur",
+  SYD: "Australia/Sydney", MEL: "Australia/Melbourne",
+  BNE: "Australia/Brisbane", ADL: "Australia/Adelaide", PER: "Australia/Perth",
+  CGK: "Asia/Jakarta",
+  MNL: "Asia/Manila",
+  DEL: "Asia/Kolkata", BOM: "Asia/Kolkata", BLR: "Asia/Kolkata",
+  MAA: "Asia/Kolkata", CCU: "Asia/Kolkata",
+  // ── Latin America ──────────────────────────────────────────────────────
+  GRU: "America/Sao_Paulo", GIG: "America/Sao_Paulo",
+  EZE: "America/Argentina/Buenos_Aires",
+  BOG: "America/Bogota",
+  SCL: "America/Santiago",
+  LIM: "America/Lima",
+  UIO: "America/Guayaquil",
+  PTY: "America/Panama",
+  // ── Africa ─────────────────────────────────────────────────────────────
+  JNB: "Africa/Johannesburg", CPT: "Africa/Johannesburg",
+  CAI: "Africa/Cairo",
+  CMN: "Africa/Casablanca",
+  NBO: "Africa/Nairobi",
+  LOS: "Africa/Lagos",
+};
+
+/**
+ * Resolve an IATA airport code (or an IANA zone passed straight through,
+ * detected by the "/") to an IANA timezone string. Falls back to UTC with
+ * a logged warning when the code isn't in the map — callers get a value
+ * either way, but the fallback is visible in logs rather than silent.
+ */
+export function tzForAirport(iataOrTz: string | null | undefined): string {
+  if (!iataOrTz) {
+    console.warn("[tzForAirport] no airport/timezone provided — falling back to UTC");
+    return "UTC";
+  }
+  if (iataOrTz.includes("/")) return iataOrTz; // already an IANA zone
+  const tz = AIRPORT_TIMEZONES[iataOrTz.toUpperCase()];
+  if (!tz) {
+    console.warn(`[tzForAirport] no timezone mapping for airport "${iataOrTz}" — falling back to UTC`);
+    return "UTC";
+  }
+  return tz;
+}
+
+/**
+ * The hour-of-day (0–23) at an airport right now, in ITS local timezone —
+ * not the server's. Accepts either an IATA code or an IANA zone string.
+ * Pure aside from the injectable `date` (defaults to now, for testability).
+ */
+export function hourAtAirport(iataOrTz: string | null | undefined, date: Date = new Date()): number {
+  const tz = tzForAirport(iataOrTz);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    hour12: false,
+    timeZone: tz,
+  }).formatToParts(date);
+  // hour12:false can format midnight as "24" in some engines — normalize.
+  return Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+}

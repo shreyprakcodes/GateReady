@@ -173,7 +173,7 @@ export default async function DashboardPage() {
               { href: "/itinerary",     label: "Itinerary",        sub: "Step-by-step plan",      dot: "#10B981" },
               { href: "/routes",        label: "Route Planner",    sub: "Live traffic + Uber",    dot: "#F59E0B" },
               { href: "/flight-status", label: "Track Flight",     sub: "Live status + progress", dot: "#4F46E5" },
-              { href: "/tsa",           label: "TSA Wait Times",   sub: "All lanes, live data",   dot: "#10B981" },
+              { href: "/tsa",           label: "TSA Wait Times",   sub: "Wait estimates by hour", dot: "#10B981" },
               { href: "/food",          label: "Food Stops",       sub: "En route + at airport",  dot: "#F59E0B" },
             ].map((item) => (
               <Link

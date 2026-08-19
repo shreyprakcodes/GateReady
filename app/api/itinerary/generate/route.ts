@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
       time: tsaStart.toISOString(),
       label: hasPrecheck ? "TSA PreCheck" : "TSA Security",
       icon: "security",
-      detail: `~${tsaMinutes} min wait · ${hasPrecheck ? "Keep shoes on, laptop in bag" : "Shoes off, laptop out, 3-1-1 bag"}`,
+      detail: `~${tsaMinutes} min est. wait · ${hasPrecheck ? "Keep shoes on, laptop in bag" : "Shoes off, laptop out, 3-1-1 bag"}`,
       step_type: "security",
       status: "pending",
     },
