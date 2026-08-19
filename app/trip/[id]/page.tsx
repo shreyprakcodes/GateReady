@@ -20,7 +20,7 @@ import { SharePanel } from "@/components/trip/SharePanel";
 import { BoardingPass } from "@/components/trip/BoardingPass";
 import { TripReadinessCard } from "@/components/trip/TripReadinessCard";
 import type { Database } from "@/lib/supabase/types";
-import { resolveFlightTime, fmtFlightTime } from "@/lib/utils/time";
+import { resolveFlightTime, fmtFlightTime, formatDuration } from "@/lib/utils/time";
 import { getAirlineTheme } from "@/lib/airlineThemes";
 
 type Trip = Database["public"]["Tables"]["trips"]["Row"];
@@ -470,7 +470,7 @@ export default function TripDetailPage() {
                   <Clock className="h-4 w-4" style={{ color: theme.primary }} />
                   {driveMin !== null ? (
                     <>
-                      <span className="text-base font-bold" style={{ color: C.text }}>{driveMin} min</span>
+                      <span className="text-base font-bold" style={{ color: C.text }}>{formatDuration(driveMin)}</span>
                       <span className="text-xs" style={{ color: C.muted }}>drive</span>
                     </>
                   ) : (

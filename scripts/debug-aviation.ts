@@ -1,15 +1,40 @@
-import { NextResponse } from "next/server";
-import { lookupFlight } from "@/lib/api/aviation";
-import { createServiceClient } from "@/lib/supabase/server";
+/**
+ * Manual timezone-pipeline trace for the FlightAware → DB → display path.
+ *
+ * Ported from the former app/api/debug/aviation/route.ts (removed — it was an
+ * unauthenticated route that queried live user trip data via the service-role
+ * key with no auth check; see the security audit that flagged it).
+ *
+ * Run manually:
+ *   npx tsx scripts/debug-aviation.ts
+ *
+ * Uses SUPABASE_SERVICE_ROLE_KEY (bypasses RLS) read from .env.local — this
+ * script talks directly to the DB and to FlightAware, outside the Next.js
+ * request/auth pipeline entirely. Do not wire this back up as a route.
+ */
+import { readFileSync } from "fs";
+import { resolve } from "path";
+import { createClient } from "@supabase/supabase-js";
+import { lookupFlight } from "../lib/api/aviation";
+
+// ── Load .env.local manually (this runs outside Next.js, which normally does this) ──
+const envPath = resolve(process.cwd(), ".env.local");
+for (const line of readFileSync(envPath, "utf-8").split("\n")) {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) continue;
+  const eq = trimmed.indexOf("=");
+  if (eq < 0) continue;
+  const key = trimmed.slice(0, eq).trim();
+  const value = trimmed.slice(eq + 1).trim();
+  if (!(key in process.env)) process.env[key] = value;
+}
 
 const FA_KEY  = process.env.FLIGHTAWARE_API_KEY;
 const FA_BASE = "https://aeroapi.flightaware.com/aeroapi";
 
-// ── Types matching the FA AeroAPI OpenAPI spec ──────────────────────────────
-
 interface FAOriginRaw {
-  code_iata:  string | null;
-  timezone:   string | null;   // IANA name, e.g. "America/New_York" — may be absent
+  code_iata: string | null;
+  timezone:  string | null; // IANA name, e.g. "America/New_York" — may be absent
   [k: string]: unknown;
 }
 interface FAFlightRaw {
@@ -24,11 +49,7 @@ interface FAFlightRaw {
   [k: string]: unknown;
 }
 
-export async function GET() {
-  if (process.env.NODE_ENV === "production") {
-    return new Response("Not Found", { status: 404 });
-  }
-
+async function main() {
   const today = new Date().toISOString().split("T")[0];
 
   // ── STAGE A: RAW FlightAware response (before any transformation) ─────────
@@ -62,7 +83,7 @@ export async function GET() {
     "origin.code_iata":  rawFlight?.origin?.code_iata  ?? "(null)",
     "origin.timezone":   rawFlight?.origin?.timezone   ?? "(null — BUG SOURCE if null here)",
   };
-  console.log("[tz-trace] STAGE A raw FA:", JSON.stringify(stageA));
+  console.log("[tz-trace] STAGE A raw FA:", JSON.stringify(stageA, null, 2));
 
   // ── STAGE B: After adapter normalization ──────────────────────────────────
   // lookupFlight runs the same FA call internally; we use its return value.
@@ -77,12 +98,20 @@ export async function GET() {
     isSample,
     note: "adapter: depTime = estimated_out ?? scheduled_out; tz = origin?.timezone ?? null",
   };
-  console.log("[tz-trace] STAGE B normalized:", JSON.stringify(stageB));
+  console.log("[tz-trace] STAGE B normalized:", JSON.stringify(stageB, null, 2));
 
   // ── STAGE C: Stored in trips table ───────────────────────────────────────
   // Queries existing AA100 rows so we can see what was actually written.
+  // Uses the service-role key directly (not lib/supabase/server's
+  // createServiceClient — that file also exports a next/headers-based client,
+  // and importing it here would pull next/headers into a non-Next.js runtime).
 
-  const db = createServiceClient();
+  const db = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } },
+  );
+
   const { data: dbRows, error: dbErr } = await db
     .from("trips")
     .select("id, flight_number, departure_time, departure_timezone, created_at")
@@ -103,12 +132,12 @@ export async function GET() {
     db_error: dbErr?.message ?? null,
     hint:
       (dbRows ?? []).length === 0
-        ? "⚠️  No AA100 rows found — add the flight then re-hit this endpoint"
+        ? "⚠️  No AA100 rows found — add the flight then re-run this script"
         : (dbRows ?? []).some((r) => r.departure_timezone === null)
           ? "🔴 departure_timezone is NULL in DB row(s) — this IS the display bug"
           : "✅ departure_timezone is set in all DB rows",
   };
-  console.log("[tz-trace] STAGE C DB rows:", JSON.stringify(stageC));
+  console.log("[tz-trace] STAGE C DB rows:", JSON.stringify(stageC, null, 2));
 
   // ── STAGE D: What the trip API returns to the client ─────────────────────
   // The dashboard queries Supabase directly (no custom API route for trips).
@@ -122,7 +151,7 @@ export async function GET() {
     departure_timezone_as_returned: firstRow?.departure_timezone ?? "(null or no row)",
     supabase_timestamptz_format_example: "2026-06-28T22:05:00+00:00",
   };
-  console.log("[tz-trace] STAGE D API→client:", JSON.stringify(stageD));
+  console.log("[tz-trace] STAGE D API→client:", JSON.stringify(stageD, null, 2));
 
   // ── STAGE E: Component formatting ─────────────────────────────────────────
   // Simulates fmtFlightTime() from lib/utils/time.ts with / without tz.
@@ -152,13 +181,13 @@ export async function GET() {
   } else {
     stageE["note"] = "No departure_time available — add flight to DB first";
   }
-  console.log("[tz-trace] STAGE E display:", JSON.stringify(stageE));
+  console.log("[tz-trace] STAGE E display:", JSON.stringify(stageE, null, 2));
 
   // ── Verdict ────────────────────────────────────────────────────────────────
 
-  const faHasTz   = !!rawFlight?.origin?.timezone;
-  const dbHasTz   = !!firstRow?.departure_timezone;
-  const hasDbRow  = (dbRows?.length ?? 0) > 0;
+  const faHasTz  = !!rawFlight?.origin?.timezone;
+  const dbHasTz  = !!firstRow?.departure_timezone;
+  const hasDbRow = (dbRows?.length ?? 0) > 0;
 
   let verdict: string;
   if (!FA_KEY) {
@@ -168,7 +197,7 @@ export async function GET() {
       "The timezone is null at the adapter and propagates null into the DB and display.";
   } else if (!hasDbRow) {
     verdict = "⚠️  FlightAware returns timezone but no AA100 row exists in DB yet. " +
-      "Add the flight, then re-hit this endpoint to confirm stages C–E.";
+      "Add the flight, then re-run this script to confirm stages C–E.";
   } else if (!dbHasTz) {
     verdict = "🔴 BUG AT STAGE B→C: FA returns origin.timezone but DB row has null. " +
       "The save route was missing departure_timezone when this row was inserted. " +
@@ -178,12 +207,10 @@ export async function GET() {
       "trip.departure_timezone is threaded to every fmtFlightTime() call in components.";
   }
 
-  return NextResponse.json({
-    stageA,
-    stageB,
-    stageC,
-    stageD,
-    stageE,
-    verdict,
-  });
+  console.log("\n[tz-trace] VERDICT:", verdict);
 }
+
+main().catch((err) => {
+  console.error("[tz-trace] script threw:", err);
+  process.exit(1);
+});

@@ -80,7 +80,7 @@ export default async function AgentPage() {
         {/* Chat */}
         <div className="flex-1 overflow-hidden">
           <Suspense>
-            <AgentChat userId={user.id} tripId={trip?.id ?? ""} />
+            <AgentChat tripId={trip?.id ?? ""} />
           </Suspense>
         </div>
       </main>

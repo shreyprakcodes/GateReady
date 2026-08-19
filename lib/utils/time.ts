@@ -1,4 +1,17 @@
 /**
+ * Format a duration in minutes as a human-readable string.
+ * Under 60 min → "45m". 60+ min → "1h 30m", "16h 58m", etc.
+ */
+export function formatDuration(minutes: number): string {
+  if (!Number.isFinite(minutes)) return "—";
+  const m = Math.round(minutes);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem === 0 ? `${h}h` : `${h}h ${rem}m`;
+}
+
+/**
  * Format a UTC ISO flight time for display in the given IANA airport timezone.
  *
  * When showTzLabel is true, appends the abbreviated timezone offset (e.g. "EDT", "MST").

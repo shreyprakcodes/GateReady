@@ -12,6 +12,7 @@ import { useStore } from "@/lib/store/useStore";
 import { useLocationStore } from "@/src/store/locationStore";
 import { useTsaWaitTime } from "@/src/hooks/useTsaWaitTime";
 import { AIRPORT_COORDS } from "@/src/components/RouteMap";
+import { formatDuration } from "@/lib/utils/time";
 import type { JourneyStep } from "@/src/components/JourneyTimeline";
 import type { LoadedRoute } from "@/src/components/RouteMap";
 import type { RouteMode } from "@/app/api/routes/route";
@@ -219,8 +220,8 @@ interface CustomOpts {
 function buildModes(data: ApiRouteData | null): Mode[] {
   const drv = data?.driving;
   const trs = data?.transit;
-  const drvDuration = drv ? `${drv.durationMinutes} min` : "—";
-  const trsDuration = trs ? `${trs.durationMinutes} min` : "—";
+  const drvDuration = drv ? formatDuration(drv.durationMinutes) : "—";
+  const trsDuration = trs ? formatDuration(trs.durationMinutes) : "—";
   const drvBuffer   = drv ? `~${drv.distanceMiles ?? "?"} mi · real-time traffic` : "Calculating…";
   const trsBuffer   = trs ? `${trs.cost ?? "~$3"} · ${trs.transfers ?? 0} transfer${(trs.transfers ?? 0) !== 1 ? "s" : ""}` : "—";
 
@@ -239,7 +240,7 @@ function buildModes(data: ApiRouteData | null): Mode[] {
     { id: "buffer",   label: "With Buffer", Icon: Shield,    accent: "#F59E0B", duration: drvDuration, buffer: "60+ min buffer · Recommended", tag: "Recommended", uberDeepLink: drv?.uberDeepLink ?? null, mapsLink: drv?.mapsDeepLink, steps: drvSteps() },
     { id: "fastest",  label: "Fastest",     Icon: Zap,       accent: "#4F46E5", duration: drvDuration, buffer: drvBuffer,                       tag: null,          uberDeepLink: drv?.uberDeepLink ?? null, mapsLink: drv?.mapsDeepLink, steps: drvSteps() },
     { id: "cheapest", label: "Cheapest",    Icon: DollarSign, accent: "#10B981", duration: trsDuration, buffer: trsBuffer,                       tag: trs ? `${trs.cost ?? "~$3"} fare` : null, mapsLink: trs?.mapsDeepLink ?? drv?.mapsDeepLink, steps: trsSteps() },
-    { id: "food",     label: "Food Stop",   Icon: Coffee,    accent: "#F97316", duration: drv ? `${drv.durationMinutes + 5} min` : "—", buffer: "☕ coffee on the way", tag: null, uberDeepLink: drv?.uberDeepLink ?? null, mapsLink: drv?.mapsDeepLink, steps: [{ icon: "🏠", label: "Leave home" }, { icon: "☕", label: "Grab coffee", detail: "+5 min detour" }, { icon: "🚗", label: "Drive to airport", detail: drvDuration }, { icon: "🛫", label: "Arrive at terminal" }] },
+    { id: "food",     label: "Food Stop",   Icon: Coffee,    accent: "#F97316", duration: drv ? formatDuration(drv.durationMinutes + 5) : "—", buffer: "☕ coffee on the way", tag: null, uberDeepLink: drv?.uberDeepLink ?? null, mapsLink: drv?.mapsDeepLink, steps: [{ icon: "🏠", label: "Leave home" }, { icon: "☕", label: "Grab coffee", detail: "+5 min detour" }, { icon: "🚗", label: "Drive to airport", detail: drvDuration }, { icon: "🛫", label: "Arrive at terminal" }] },
     { id: "custom",   label: "Custom",      Icon: Settings2, accent: "#6B7280", duration: "—",         buffer: "Build your own route",           tag: null,          uberDeepLink: drv?.uberDeepLink ?? null, mapsLink: drv?.mapsDeepLink, steps: [] },
   ];
 }
@@ -440,7 +441,7 @@ export default function RoutesPage() {
             <p className="text-xs mt-2 ml-12" style={{ color: "#9CA3AF" }}>
               {tripStatus === "running_late"
                 ? `Suggested departure was ${fmt12(leaveHomeTime)}`
-                : `Leave by ${fmt12(leaveHomeTime)} · ${driveMin} min drive${driveSource === "google" ? "" : " (est.)"}`}
+                : `Leave by ${fmt12(leaveHomeTime)} · ${formatDuration(driveMin)} drive${driveSource === "google" ? "" : " (est.)"}`}
               {coords ? "" : " · (enable location for precise timing)"}
             </p>
           )}
@@ -696,7 +697,7 @@ function RouteCard({
           animation: "timeUpdate 0.3s ease",
         }}
       >
-        {durMin} min
+        {formatDuration(durMin)}
       </p>
 
       <p style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>

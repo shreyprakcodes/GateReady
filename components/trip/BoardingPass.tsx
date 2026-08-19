@@ -128,7 +128,7 @@ export function BoardingPass({ trip, airlineCode, isSample }: Props) {
         {/* Origin */}
         <div className="flex-1 min-w-0">
           <p
-            className="text-[52px] font-black leading-none tracking-tight"
+            className="text-[clamp(2.25rem,6vw+1rem,3.25rem)] font-black leading-none tracking-tight whitespace-nowrap"
             style={{ color: "#1A1A2E", fontFamily: "monospace" }}
           >
             {trip.origin ?? "—"}
@@ -148,7 +148,7 @@ export function BoardingPass({ trip, airlineCode, isSample }: Props) {
         {/* Destination */}
         <div className="flex-1 min-w-0 text-right">
           <p
-            className="text-[52px] font-black leading-none tracking-tight"
+            className="text-[clamp(2.25rem,6vw+1rem,3.25rem)] font-black leading-none tracking-tight whitespace-nowrap"
             style={{ color: "#1A1A2E", fontFamily: "monospace" }}
           >
             {trip.destination ?? "—"}

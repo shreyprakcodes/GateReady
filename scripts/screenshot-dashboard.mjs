@@ -1,11 +1,29 @@
 import { chromium } from "playwright";
 import { mkdir } from "fs/promises";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 
-const SUPABASE_URL = "https://ovxxzefhtkrusdnvneks.supabase.co";
-const SERVICE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im92eHh6ZWZodGtydXNkbnZuZWtzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTE0OTQ5MCwiZXhwIjoyMDk2NzI1NDkwfQ.X4wS1nd0YJvWN0ytQqYpfqjEnnLhlt7RuqtIqLSJ3eU";
-const USER_EMAIL   = "shreyashprakashescapes@gmail.com";
+// ── Read .env.local manually ──────────────────────────────────
+const envPath = resolve(process.cwd(), ".env.local");
+const envVars = {};
+for (const line of readFileSync(envPath, "utf-8").split("\n")) {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) continue;
+  const eq = trimmed.indexOf("=");
+  if (eq < 0) continue;
+  envVars[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+}
+
+const SUPABASE_URL = envVars["NEXT_PUBLIC_SUPABASE_URL"] ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SERVICE_KEY  = envVars["SUPABASE_SERVICE_ROLE_KEY"] ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+const USER_EMAIL   = envVars["SCREENSHOT_USER_EMAIL"] ?? process.env.SCREENSHOT_USER_EMAIL;
 const BASE         = "http://localhost:3000";
-const OUT          = "C:/Users/shrey/gateready/scripts/screenshots";
+const OUT          = resolve(process.cwd(), "scripts/screenshots");
+
+if (!SUPABASE_URL || !SERVICE_KEY || !USER_EMAIL) {
+  console.error("Missing NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, or SCREENSHOT_USER_EMAIL in .env.local");
+  process.exit(1);
+}
 
 // 1. Generate a magic link via the Supabase Admin API
 const linkRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/generate_link`, {

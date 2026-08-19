@@ -16,11 +16,10 @@ const CHIPS = [
 ];
 
 interface Props {
-  userId: string;
   tripId: string;
 }
 
-export function AgentChat({ userId, tripId }: Props) {
+export function AgentChat({ tripId }: Props) {
   const [input, setInput] = useState("");
   const abortRef          = useRef<AbortController | null>(null);
   const bottomRef         = useRef<HTMLDivElement>(null);
@@ -55,7 +54,7 @@ export function AgentChat({ userId, tripId }: Props) {
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg, userId, tripId, history }),
+        body: JSON.stringify({ message: msg, tripId, history }),
         signal: abortRef.current.signal,
       });
 

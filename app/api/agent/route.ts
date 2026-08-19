@@ -36,7 +36,6 @@ export async function POST(request: NextRequest) {
   }
 
   console.log(`[api/agent] POST userId=${userId} tripId=${tripId || "(none)"} message="${message.slice(0, 80)}"`);
-  console.log(`[api/agent] ANTHROPIC_API_KEY present: ${!!process.env.ANTHROPIC_API_KEY}, prefix: ${process.env.ANTHROPIC_API_KEY?.slice(0, 12) ?? "missing"}`);
 
   const supabase = createServiceClient();
 

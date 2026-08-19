@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Playfair_Display, Inter } from "next/font/google";
+import { FetchLogger } from "@/components/dev/FetchLogger";
 import "./globals.css";
 
 const playfair = Playfair_Display({
@@ -26,6 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         className="min-h-full antialiased"
         style={{ backgroundColor: "#F7F5F0", color: "#1A1A2E", fontFamily: "var(--font-inter), Inter, sans-serif" }}
       >
+        {process.env.NODE_ENV === "development" && <FetchLogger />}
         {children}
       </body>
     </html>

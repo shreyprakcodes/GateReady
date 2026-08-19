@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { GoogleMap, OverlayView, Polyline, useJsApiLoader } from "@react-google-maps/api";
+import { GoogleMap, OverlayView, Polyline, TrafficLayer, useJsApiLoader } from "@react-google-maps/api";
 import { Minus, Plus, LocateFixed, Maximize2 } from "lucide-react";
 import { useLocationStore } from "@/src/store/locationStore";
+import { AIRPORT_COORDS, distanceKmTo } from "@/lib/airportCoords";
 
 // ─── Exported route data type ─────────────────────────────────────────────────
 
@@ -26,22 +27,12 @@ interface RouteMapProps {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-export const AIRPORT_COORDS: Record<string, { lat: number; lng: number }> = {
-  PHX: { lat: 33.4373, lng: -112.0078 }, JFK: { lat: 40.6413, lng: -73.7781 },
-  LAX: { lat: 33.9425, lng: -118.4081 }, ORD: { lat: 41.9742, lng: -87.9073 },
-  ATL: { lat: 33.6407, lng: -84.4277  }, DFW: { lat: 32.8998, lng: -97.0403 },
-  SFO: { lat: 37.6213, lng: -122.3790 }, LGA: { lat: 40.7769, lng: -73.8740 },
-  EWR: { lat: 40.6895, lng: -74.1745  }, BOS: { lat: 42.3656, lng: -71.0096 },
-  MIA: { lat: 25.7959, lng: -80.2870  }, SEA: { lat: 47.4502, lng: -122.3088 },
-  DEN: { lat: 39.8561, lng: -104.6737 }, MCO: { lat: 28.4312, lng: -81.3081 },
-  LAS: { lat: 36.0840, lng: -115.1537 }, IAH: { lat: 29.9902, lng: -95.3368 },
-  MSP: { lat: 44.8848, lng: -93.2223  }, DTW: { lat: 42.2162, lng: -83.3554 },
-  PHL: { lat: 39.8744, lng: -75.2424  }, CLT: { lat: 35.2140, lng: -80.9431 },
-  SAN: { lat: 32.7338, lng: -117.1933 }, TPA: { lat: 27.9755, lng: -82.5332 },
-  PDX: { lat: 45.5898, lng: -122.5951 }, MDW: { lat: 41.7868, lng: -87.7522 },
-};
+// Re-export so callers that import AIRPORT_COORDS from here still work.
+export { AIRPORT_COORDS } from "@/lib/airportCoords";
 
-const DEFAULT_AIRPORT = { lat: 39.8, lng: -98.6 }; // geographic US center
+// Distance above which drawing a driving route to the airport is nonsensical.
+// Matches the server-side FAR_THRESHOLD_KM in app/api/leave-now/route.ts.
+const FAR_THRESHOLD_KM = 500;
 
 const LOADER_OPTIONS = {
   id: "gr-google-maps",
@@ -211,8 +202,13 @@ function MapControls({ mapRef, coords, routes, selectedRouteIndex, airport }: Co
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function RouteMap({ selectedRouteIndex, airportCode, refreshKey = 0, onRoutesLoaded }: RouteMapProps) {
-  const coords       = useLocationStore((s) => s.coords);
-  const airportCoords = (airportCode && AIRPORT_COORDS[airportCode]) || DEFAULT_AIRPORT;
+  const coords        = useLocationStore((s) => s.coords);
+  const airportCoords = airportCode ? (AIRPORT_COORDS[airportCode] ?? null) : null;
+
+  // Distance from user to the departure airport — null when either is unknown.
+  const distanceKm: number | null =
+    coords && airportCode ? distanceKmTo(coords.lat, coords.lng, airportCode) : null;
+  const isFar = distanceKm !== null && distanceKm > FAR_THRESHOLD_KM;
 
   const { isLoaded, loadError } = useJsApiLoader(LOADER_OPTIONS);
 
@@ -230,9 +226,10 @@ export function RouteMap({ selectedRouteIndex, airportCode, refreshKey = 0, onRo
     mapRef.current = map;
   }, []);
 
-  // Fetch all route alternatives from Directions API
+  // Fetch all route alternatives from Directions API.
+  // Skipped when: no user coords, airport coords unknown, or user is far from the airport.
   const fetchRoutes = useCallback(() => {
-    if (!coords) return;
+    if (!coords || !airportCoords || isFar) return;
     new google.maps.DirectionsService().route(
       {
         origin:                    { lat: coords.lat, lng: coords.lng },
@@ -261,11 +258,13 @@ export function RouteMap({ selectedRouteIndex, airportCode, refreshKey = 0, onRo
         onRoutesLoadedRef.current?.(loaded);
       },
     );
-  }, [coords, airportCoords]);
+  }, [coords, airportCoords, isFar]);
 
-  // Trigger fetch on first load or when coords/refreshKey change significantly
+  // Trigger fetch on first load or when coords/refreshKey change significantly.
+  // Clear any stale routes immediately when the user is determined to be far.
   useEffect(() => {
     if (!isLoaded || !coords) return;
+    if (isFar) { setRoutes([]); return; }
     const coordsKey = `${coords.lat.toFixed(3)},${coords.lng.toFixed(3)}`;
     const coordsChanged  = fetchedKeyRef.current !== coordsKey;
     const refreshChanged = prevRefreshKeyRef.current !== refreshKey;
@@ -273,7 +272,7 @@ export function RouteMap({ selectedRouteIndex, airportCode, refreshKey = 0, onRo
     fetchedKeyRef.current     = coordsKey;
     prevRefreshKeyRef.current = refreshKey;
     fetchRoutes();
-  }, [isLoaded, coords?.lat, coords?.lng, refreshKey, fetchRoutes]);
+  }, [isLoaded, coords?.lat, coords?.lng, refreshKey, isFar, fetchRoutes]);
 
   // Fit bounds to first route on initial load
   useEffect(() => {
@@ -317,43 +316,67 @@ export function RouteMap({ selectedRouteIndex, airportCode, refreshKey = 0, onRo
     return <div className="w-full h-full animate-pulse" style={{ background: "#E8E4DC" }} />;
   }
 
-  const center = coords ? { lat: coords.lat, lng: coords.lng } : airportCoords;
+  // Fall back to a world-center view when we don't know the airport.
+  const mapCenter =
+    coords                ? { lat: coords.lat, lng: coords.lng } :
+    airportCoords         ? airportCoords :
+    /* total unknown */     { lat: 20, lng: 0 };
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      {/* ── Far-from-airport / international banner ───────────────── */}
+      {isFar && airportCoords && (
+        <div
+          style={{
+            position: "absolute", top: 12, left: 12, right: 12, zIndex: 20,
+            backgroundColor: "rgba(255,255,255,0.95)",
+            border: "1px solid #E8E0D5", borderRadius: 12,
+            padding: "10px 14px",
+            display: "flex", alignItems: "center", gap: 8,
+            boxShadow: "0 2px 12px rgba(0,0,0,0.10)",
+          }}
+        >
+          <span style={{ fontSize: 16 }}>✈️</span>
+          <p style={{ fontSize: 12, color: "#8B8070", lineHeight: 1.4 }}>
+            <strong style={{ color: "#1A1A2E" }}>{airportCode}</strong>
+            {" "}is {distanceKm !== null ? `${Math.round(distanceKm).toLocaleString()} km away` : "far away"}
+            {" "}— live route not available
+          </p>
+        </div>
+      )}
+
       <GoogleMap
         mapContainerStyle={{ width: "100%", height: "100%" }}
-        center={center}
-        zoom={12}
+        center={isFar && airportCoords ? airportCoords : mapCenter}
+        zoom={isFar ? 11 : 12}
         options={MAP_OPTIONS}
         onLoad={onMapLoad}
       >
+        {/* Live traffic layer — shown only when a valid local route is present */}
+        {routes.length > 0 && <TrafficLayer />}
+
         {/* Unselected routes — dashed gray, behind */}
         {routes.map((route, i) =>
           i !== selectedRouteIndex ? (
             <Polyline
               key={`unsel-${i}`}
               path={route.overviewPath}
-              options={{
-                strokeOpacity: 0,
-                zIndex: 1,
-                icons: DASHED_ICONS,
-              }}
+              options={{ strokeOpacity: 0, zIndex: 1, icons: DASHED_ICONS }}
             />
           ) : null,
         )}
 
-        {/* Selected route — solid indigo, on top */}
+        {/* Selected route — brand teal, on top of traffic layer */}
         {routes[selectedRouteIndex] && (
           <Polyline
             key={`sel-${selectedRouteIndex}`}
             path={routes[selectedRouteIndex].overviewPath}
-            options={{ strokeColor: "#4F46E5", strokeWeight: 5, strokeOpacity: 0.9, zIndex: 10 }}
+            options={{ strokeColor: "#00D4B8", strokeWeight: 5, strokeOpacity: 0.92, zIndex: 10 }}
           />
         )}
 
-        {/* User location marker */}
-        {coords && (
+        {/* User location marker (only when near airport) */}
+        {coords && !isFar && (
           <OverlayView
             position={{ lat: coords.lat, lng: coords.lng }}
             mapPaneName="overlayMouseTarget"
@@ -363,23 +386,25 @@ export function RouteMap({ selectedRouteIndex, airportCode, refreshKey = 0, onRo
           </OverlayView>
         )}
 
-        {/* Airport marker */}
-        <OverlayView
-          position={airportCoords}
-          mapPaneName="overlayMouseTarget"
-          getPixelPositionOffset={() => ({ x: -20, y: -48 })}
-        >
-          <AirportPin iata={airportCode ?? "✈"} />
-        </OverlayView>
+        {/* Airport marker — shown at correct coordinates */}
+        {airportCoords && (
+          <OverlayView
+            position={airportCoords}
+            mapPaneName="overlayMouseTarget"
+            getPixelPositionOffset={() => ({ x: -20, y: -48 })}
+          >
+            <AirportPin iata={airportCode ?? "✈"} />
+          </OverlayView>
+        )}
       </GoogleMap>
 
       {/* Map controls (outside GoogleMap so they're not in the Maps DOM) */}
       <MapControls
         mapRef={mapRef}
-        coords={coords}
+        coords={coords && !isFar ? coords : null}
         routes={routes}
         selectedRouteIndex={selectedRouteIndex}
-        airport={airportCoords}
+        airport={airportCoords ?? mapCenter}
       />
     </div>
   );

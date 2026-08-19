@@ -3,25 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { GoogleMap, OverlayView, useJsApiLoader } from "@react-google-maps/api";
 import { useLocationStore } from "@/src/store/locationStore";
+import { AIRPORT_COORDS } from "@/lib/airportCoords";
 
-// ─── Airport coordinates ──────────────────────────────────────────────────────
-
-const AIRPORT_COORDS: Record<string, { lat: number; lng: number }> = {
-  PHX: { lat: 33.4373, lng: -112.0078 }, JFK: { lat: 40.6413, lng: -73.7781  },
-  LAX: { lat: 33.9425, lng: -118.4081 }, ORD: { lat: 41.9742, lng: -87.9073  },
-  ATL: { lat: 33.6407, lng: -84.4277  }, DFW: { lat: 32.8998, lng: -97.0403  },
-  SFO: { lat: 37.6213, lng: -122.3790 }, LGA: { lat: 40.7769, lng: -73.8740  },
-  EWR: { lat: 40.6895, lng: -74.1745  }, BOS: { lat: 42.3656, lng: -71.0096  },
-  MIA: { lat: 25.7959, lng: -80.2870  }, SEA: { lat: 47.4502, lng: -122.3088 },
-  DEN: { lat: 39.8561, lng: -104.6737 }, MCO: { lat: 28.4312, lng: -81.3081  },
-  LAS: { lat: 36.0840, lng: -115.1537 }, IAH: { lat: 29.9902, lng: -95.3368  },
-  MSP: { lat: 44.8848, lng: -93.2223  }, DTW: { lat: 42.2162, lng: -83.3554  },
-  PHL: { lat: 39.8744, lng: -75.2424  }, CLT: { lat: 35.2140, lng: -80.9431  },
-  SAN: { lat: 32.7338, lng: -117.1933 }, TPA: { lat: 27.9755, lng: -82.5332  },
-  PDX: { lat: 45.5898, lng: -122.5951 }, MDW: { lat: 41.7868, lng: -87.7522  },
-};
-
-const US_CENTER = { lat: 39.8, lng: -98.6 };
+// Geographic center used only as the initial map view before fit-bounds fires.
+const WORLD_CENTER = { lat: 20, lng: 0 };
 
 const LOADER_OPTIONS = {
   id: "gr-google-maps",
@@ -155,7 +140,7 @@ export function OverviewMap({ origins }: Props) {
   return (
     <GoogleMap
       mapContainerStyle={{ width: "100%", height: "100%" }}
-      center={US_CENTER}
+      center={WORLD_CENTER}
       zoom={4}
       options={{
         styles:            SILVER_STYLES,

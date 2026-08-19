@@ -35,7 +35,10 @@ export function makeLeaveNowFixture() {
       drive:      { minutes: 45, isLive: false, note: 'No location — using 45 min estimate' },
       tsa:        { minutes: 15, source: 'estimate', note: 'Estimated wait' },
       walkToGate: { minutes: 15 },
-      buffer:     { minutes: 20 },
+      buffer:     {
+        minutes: 20,
+        factors: [{ rule: 'base', adjustmentMinutes: 0, reason: 'User preferred buffer: 20 min' }],
+      },
     },
   };
 }
