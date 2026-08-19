@@ -5,6 +5,7 @@
 
 import { hourAtAirport, tzForAirport } from "@/lib/utils/time";
 import { standardWaitMinutes } from "@/lib/tsaHistorical";
+import { fetchPhxLiveWaits } from "@/lib/api/providers/phxWaits";
 
 export interface TsaWaitResult {
   waitMinutes: number;
@@ -12,22 +13,35 @@ export interface TsaWaitResult {
   note?: string;
 }
 
-// TODO(tsa-live-data): the only "live" TSA wait-time source this app has
-// ever pointed at (tsawaittimes.com) is dead/unauthenticated, and there is
-// no working TSA_API_KEY integration to replace it. Decision needed before
-// beta: pay for a real TSA/airport data feed, or ship historical-only
-// permanently and keep the UI copy honest about that (current state).
-// This stub keeps the signature stable so a real provider can slot in
-// without touching getTsaWait or any of its callers.
-async function tryLiveTsaWait(_airport: string): Promise<{ waitMinutes: number } | null> {
-  return null;
+// TODO(tsa-live-data): PHX is the only airport with a discovered live
+// source (lib/api/providers/phxWaits.ts, extracted from skyharbor.com's
+// homepage widget). Every other airport still has no working live feed —
+// the tsawaittimes.com endpoint this used to call is dead/unauthenticated,
+// and there is no TSA_API_KEY integration to replace it with. Decision
+// needed before beta: pay for a real TSA/airport data feed for non-PHX
+// airports, or ship historical-only for them permanently. This stub keeps
+// the signature stable so a real provider can slot in per-airport without
+// touching getTsaWait or any of its callers.
+async function tryLiveTsaWait(airport: string): Promise<{ waitMinutes: number; note: string } | null> {
+  if (airport !== "PHX") return null;
+
+  const live = await fetchPhxLiveWaits();
+  if (!live) return null;
+
+  const avgMinutes = Math.round(
+    live.lanes.reduce((sum, l) => sum + l.waitMinutes, 0) / live.lanes.length,
+  );
+  const timeLabel = new Date(live.updatedAt).toLocaleTimeString("en-US", {
+    hour: "numeric", minute: "2-digit", timeZone: tzForAirport("PHX"),
+  });
+  return { waitMinutes: avgMinutes, note: `Live from PHX Sky Harbor · updated ${timeLabel}` };
 }
 
 export async function getTsaWait(airport: string): Promise<TsaWaitResult> {
   const code = airport.toUpperCase().slice(0, 3);
 
   const live = await tryLiveTsaWait(code);
-  if (live) return { waitMinutes: live.waitMinutes, source: "live" };
+  if (live) return { waitMinutes: live.waitMinutes, source: "live", note: live.note };
 
   const hour = hourAtAirport(code);
   const timeLabel = new Date().toLocaleTimeString("en-US", {
@@ -47,8 +61,8 @@ export interface TSAWaitTime {
   fastest_lane: string;
   crowd_level: string;
   updated_at: string;
-  /** Always "historical" — the live path is quarantined, see TODO above. */
-  source: "historical";
+  /** "live" only for PHX when the upstream feed is fresh — see TODO above. */
+  source: "live" | "historical";
 }
 
 export async function getWaitTime({
@@ -70,6 +84,6 @@ export async function getWaitTime({
     fastest_lane,
     crowd_level,
     updated_at: result.note ?? "Historical estimate",
-    source: "historical",
+    source: result.source,
   };
 }

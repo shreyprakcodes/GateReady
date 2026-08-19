@@ -87,16 +87,23 @@ function formatCountdown(ms: number): string {
 // ─── Sub-component: breakdown row ─────────────────────────────────
 
 function BreakdownRow({
-  icon, label, minutes, estimated,
+  icon, label, minutes, estimated, live,
 }: {
-  icon: string; label: string; minutes: number; estimated?: boolean;
+  icon: string; label: string; minutes: number; estimated?: boolean; live?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-2 min-w-0">
         <span className="text-base leading-none shrink-0">{icon}</span>
         <span className="text-sm truncate" style={{ color: "#8B8070" }}>{label}</span>
-        {estimated && (
+        {live ? (
+          <span
+            className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded shrink-0"
+            style={{ backgroundColor: "rgba(16,185,129,0.12)", color: "#10B981" }}
+          >
+            live
+          </span>
+        ) : estimated && (
           <span
             className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded shrink-0"
             style={{ backgroundColor: "#F0EDE8", color: "#8B8070" }}
@@ -501,6 +508,7 @@ export function LeaveNowCard({ onDataLoaded }: { onDataLoaded?: (data: LeaveNowD
             label="Security"
             minutes={data.inputs.tsa.minutes}
             estimated={data.inputs.tsa.source !== "live"}
+            live={data.inputs.tsa.source === "live"}
           />
           <BreakdownRow icon="🚶" label="Walk to gate" minutes={data.inputs.walkToGate.minutes} />
           <BreakdownRow icon="⏱"  label="Buffer"       minutes={data.inputs.buffer.minutes}     />

@@ -22,16 +22,23 @@ async function getDirections(origin: string, destination: string, departureUnix:
   };
 }
 
-async function getTsaWait(airportIata: string, hasPrecheck: boolean): Promise<number> {
+interface TsaWaitInfo {
+  minutes: number;
+  source: "live" | "historical";
+}
+
+async function getTsaWait(airportIata: string, hasPrecheck: boolean): Promise<TsaWaitInfo> {
+  const fallback: TsaWaitInfo = { minutes: hasPrecheck ? 5 : 20, source: "historical" };
   try {
     const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
     const res = await fetch(`${baseUrl}/api/tsa?airport=${airportIata}`, { cache: "no-store" });
-    if (!res.ok) return hasPrecheck ? 5 : 20;
+    if (!res.ok) return fallback;
     const data = await res.json();
     const targetType = hasPrecheck ? "precheck" : "standard";
     const lane = (data.lanes ?? []).find((l: { type: string }) => l.type === targetType) ?? data.lanes?.[0];
-    return lane?.waitMinutes ?? (hasPrecheck ? 5 : 20);
-  } catch { return hasPrecheck ? 5 : 20; }
+    if (!lane) return fallback;
+    return { minutes: lane.waitMinutes, source: data.source === "live" ? "live" : "historical" };
+  } catch { return fallback; }
 }
 
 interface Step {
@@ -86,10 +93,11 @@ export async function POST(request: NextRequest) {
 
   const departureUnix = Math.floor(depTime.getTime() / 1000) - 10800; // 3h before for routing
 
-  const [directions, tsaMinutes] = await Promise.all([
+  const [directions, tsaWait] = await Promise.all([
     getDirections(originCoord, destination, departureUnix),
     getTsaWait(trip.origin ?? "JFK", hasPrecheck),
   ]);
+  const tsaMinutes = tsaWait.minutes;
 
   const trafficMinutes = directions ? Math.ceil(directions.durationSecs / 60) : 45;
   const gateWalkMinutes = 6;
@@ -150,7 +158,7 @@ export async function POST(request: NextRequest) {
       time: tsaStart.toISOString(),
       label: hasPrecheck ? "TSA PreCheck" : "TSA Security",
       icon: "security",
-      detail: `~${tsaMinutes} min est. wait · ${hasPrecheck ? "Keep shoes on, laptop in bag" : "Shoes off, laptop out, 3-1-1 bag"}`,
+      detail: `~${tsaMinutes} min ${tsaWait.source === "live" ? "wait (live)" : "est. wait"} · ${hasPrecheck ? "Keep shoes on, laptop in bag" : "Shoes off, laptop out, 3-1-1 bag"}`,
       step_type: "security",
       status: "pending",
     },

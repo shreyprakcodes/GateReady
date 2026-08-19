@@ -9,6 +9,16 @@ export interface HistoricalWait {
   clear: number;
 }
 
+// Shared lane shape used by both historical and live TSA sources, so
+// app/api/tsa/route.ts and lib/api/providers/phxWaits.ts speak the same type.
+export type TsaLaneType = "standard" | "precheck" | "clear";
+
+export interface TsaLane {
+  name: string;
+  type: TsaLaneType;
+  waitMinutes: number;
+}
+
 // 24-value arrays indexed by LOCAL hour-of-day at the airport (0 = midnight).
 // Standard lane wait in minutes. Derived from TSA published checkpoint data
 // and traveler reports.

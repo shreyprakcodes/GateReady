@@ -6,6 +6,7 @@ import Link from "next/link";
 import { BottomNav } from "@/components/dashboard/BottomNav";
 import { useStore } from "@/lib/store/useStore";
 import type { TsaWaitData } from "@/app/api/tsa/route";
+import { tzForAirport } from "@/lib/utils/time";
 
 type ColorKey = "green" | "amber" | "red";
 
@@ -163,6 +164,22 @@ export default function TsaPage() {
             <Info className="h-4 w-4 shrink-0 mt-0.5" style={{ color: "#F59E0B" }} />
             <p className="text-[12px] leading-relaxed" style={{ color: "#B45309" }}>
               {data.historicalNote ?? `Live data unavailable · Estimates based on historical averages for ${airport} at this time of day`}
+            </p>
+          </div>
+        )}
+
+        {/* Live source note */}
+        {data && isLive && data.liveUpdatedAt && (
+          <div
+            className="rounded-2xl px-4 py-3 mb-5 flex items-start gap-3"
+            style={{ backgroundColor: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.18)" }}
+          >
+            <Info className="h-4 w-4 shrink-0 mt-0.5" style={{ color: "#10B981" }} />
+            <p className="text-[12px] leading-relaxed" style={{ color: "#047857" }}>
+              Live from Phoenix Sky Harbor · as of{" "}
+              {new Date(data.liveUpdatedAt).toLocaleTimeString("en-US", {
+                hour: "numeric", minute: "2-digit", timeZone: tzForAirport(airport),
+              })}
             </p>
           </div>
         )}

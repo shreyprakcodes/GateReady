@@ -1,14 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hourAtAirport, tzForAirport } from "@/lib/utils/time";
-import { historicalWait, TERMINAL_LANES } from "@/lib/tsaHistorical";
+import { historicalWait, TERMINAL_LANES, type TsaLane } from "@/lib/tsaHistorical";
+import { fetchPhxLiveWaits } from "@/lib/api/providers/phxWaits";
 
+export type { TsaLane } from "@/lib/tsaHistorical";
 export type TsaSource = "live" | "historical";
-
-export interface TsaLane {
-  name: string;
-  type: "standard" | "precheck" | "clear";
-  waitMinutes: number;
-}
 
 export interface TsaWaitData {
   airport: string;
@@ -17,14 +13,18 @@ export interface TsaWaitData {
   fetchedAt: string;
   /** Only present when source === "historical" */
   historicalNote?: string;
+  /** Only present when source === "live" — upstream's own reading timestamp (ISO) */
+  liveUpdatedAt?: string;
 }
 
-// TODO(tsa-live-data): see lib/api/tsa.ts for the full decision writeup —
-// the MyTSA/tsawaittimes.com endpoint this used to call is dead. Stubbed to
-// keep the signature available for a real provider later without touching
-// the GET handler below.
-async function tryLiveTsa(_airport: string): Promise<TsaLane[] | null> {
-  return null;
+// TODO(tsa-live-data): PHX is the only airport with a discovered live
+// source (lib/api/providers/phxWaits.ts) — see lib/api/tsa.ts for the full
+// decision writeup on why every other airport is still historical-only.
+async function tryLiveTsa(airport: string): Promise<{ lanes: TsaLane[]; updatedAt: string } | null> {
+  if (airport !== "PHX") return null;
+  const live = await fetchPhxLiveWaits();
+  if (!live) return null;
+  return { lanes: live.lanes, updatedAt: live.updatedAt };
 }
 
 // ── Main handler ──────────────────────────────────────────────────
@@ -34,14 +34,15 @@ export async function GET(request: NextRequest) {
   const fetchedAt = new Date().toISOString();
 
   // 1. Attempt live data
-  const liveLanes = await tryLiveTsa(airport);
+  const live = await tryLiveTsa(airport);
 
-  if (liveLanes) {
+  if (live) {
     const data: TsaWaitData = {
       airport,
-      lanes: liveLanes,
+      lanes: live.lanes,
       source: "live",
       fetchedAt,
+      liveUpdatedAt: live.updatedAt,
     };
     return NextResponse.json(data, {
       headers: { "Cache-Control": "public, max-age=60" },
